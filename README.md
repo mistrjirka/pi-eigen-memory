@@ -29,6 +29,8 @@ Source: [mistrjirka/pi-eigen-memory](https://github.com/mistrjirka/pi-eigen-memo
 
 - **Event-driven learning:** after a user correction, explicit durable decision or actual tool failure, an asynchronous Muse Spark review gets at most 7,000 characters of recent context. No periodic whole-history review. At most two validated memory mutations of 500 characters each.
 - **Just-in-time recall:** a relevant user request or failed tool result can receive up to three recent, project-scoped memory hints. This path uses SQLite only, not another model call. Memories are historical context, not permission enforcement.
+- **Slow-lookup warning:** recall warns if the complete lookup (including first-use initialization) takes 150 ms or more. The warning separates initialization and search/ranking time, contains no query text, and is limited to once per five minutes. Configure `eigenRecallWarnMs` to change the threshold, or `0` to disable warnings.
+- **Bounded automatic recall:** to avoid slowdowns as memory grows, Eigen searches at most 256 recent FTS matches plus 96 recent project memories and ranks this shortlist, rather than scoring every matching memory. It reads at most 1,600 characters per candidate and attempts at most three distinct error-triggered recalls per user turn. Explicit `memory_search` still uses full BM25 ranking. This is a candidate/work bound, not a hard millisecond deadline, and can miss older generic matches when the index becomes very large.
 - **Measured usage:** each learning event writes duration, input size, model, provider-reported tokens/cost (when available) and applied operations to `eigen-learning-metrics.jsonl` in the existing memory directory. No conversation text is logged there.
 - **Regression testing:** `tests/handlers/eigen-*.test.ts`, `tests/evals/dataverse-403.test.ts` and `evaluations/README.md`. These include the real Dataverse `403` incident, later contact-read recovery and stale-result ranking.
 
@@ -41,6 +43,7 @@ Install with `pi install git:github.com/mistrjirka/pi-eigen-memory`, then config
   "eigenRecallEnabled": true,
   "eigenLearningMaxChars": 7000,
   "eigenLearningCooldownMs": 45000,
+  "eigenRecallWarnMs": 150,
   "llmModelOverride": "opencode-go/muse-spark-1.3-contributor",
   "llmThinkingOverride": "off",
   "reviewTransport": "direct",

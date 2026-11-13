@@ -1051,6 +1051,78 @@ export function searchMemories(
 }
 
 /**
+ * Bounded recall query for Eigen's automatic prompt and tool-result hints.
+ *
+ * Unlike searchMemories() this does NOT sort all FTS matches using BM25.
+ * FTS5 visits at most `maxCandidates` recent matching docids, then a scoped
+ * primary-key join reads at most that many rows. The separate recent-project
+ * sample prevents other active projects from completely crowding out local
+ * memories. Both phases are bounded; the normal memory_search tool retains
+ * exhaustive BM25 ranking for user-requested searches.
+ *
+ * This bounds candidate work, NOT wall-clock time. A cold connection, I/O
+ * stalls and SQLite index traversal can still exceed a warning threshold.
+ */
+export function searchEigenMemoriesBounded(
+  dbManager: DatabaseManager,
+  query: string,
+  options: { project: string; maxCandidates?: number; recentProjectCandidates?: number } ,
+): SqliteMemoryEntry[] {
+  const { project } = options;
+  if (!project.trim() || !query.trim()) return [];
+  const maxCandidates = Math.min(1024, Math.max(16, Math.floor(options.maxCandidates ?? 256)));
+  const recentProjectCandidates = Math.min(256, Math.max(0, Math.floor(options.recentProjectCandidates ?? 96)));
+  const db = dbManager.getDb();
+  // Only recall snippets, not complete potentially huge memory entries.
+  const columns = `m.id, m.project, m.target, m.category,
+    substr(m.content, 1, 1600) AS content,
+    NULL AS failure_reason, NULL AS tool_state, NULL AS corrected_to,
+    m.created, m.last_referenced`;
+  const found = new Map<number, SqliteMemoryEntry>();
+  const addRows = (rows: Array<Parameters<typeof mapRow>[0]>) => {
+    for (const row of rows) found.set(row.id, mapRow(row));
+  };
+  const ftsSql = `
+    WITH candidate_ids AS MATERIALIZED (
+      SELECT rowid FROM memory_fts
+      WHERE memory_fts MATCH ?
+      ORDER BY rowid DESC LIMIT ?
+    )
+    SELECT ${columns}
+    FROM candidate_ids c CROSS JOIN memories m
+    WHERE m.id = c.rowid AND m.project = ?
+    ORDER BY c.rowid DESC
+  `;
+  const tryFts = (ftsQuery: string): number => {
+    if (!ftsQuery) return 0;
+    try {
+      const rows = db.prepare(ftsSql).all(ftsQuery, maxCandidates, project) as Array<Parameters<typeof mapRow>[0]>;
+      addRows(rows);
+      return rows.length;
+    } catch (error) {
+      if (isFts5QueryError(error)) return 0;
+      throw error;
+    }
+  };
+  const normalized = normalizeFts5Query(query.slice(0, 512));
+  const exactCount = tryFts(normalized);
+  if (!exactCount) {
+    const fallback = buildFallbackFts5Query(query.slice(0, 512));
+    if (fallback && fallback !== normalized) tryFts(fallback);
+  }
+  if (recentProjectCandidates > 0) {
+    const recent = db.prepare(`
+      SELECT ${columns} FROM memories m
+      WHERE m.project = ? ORDER BY m.id DESC LIMIT ?
+    `).all(project, recentProjectCandidates) as Array<Parameters<typeof mapRow>[0]>;
+    // Keep the more recent project sample available even when FTS matches
+    // on an unrelated project outnumber the candidate budget.
+    addRows(recent);
+  }
+  return [...found.values()];
+}
+
+/**
  * Get all memories, optionally filtered.
  */
 export function getMemories(

@@ -46,6 +46,8 @@ export interface MemoryConfig {
   eigenLearningCooldownMs?: number;
   /** Append relevant prior failure context to failed tool results. */
   eigenRecallEnabled?: boolean;
+  /** Warn when a relevant recall takes this long, including lazy initialization. 0 disables. Default 150ms. */
+  eigenRecallWarnMs?: number;
   /** How background review invokes the LLM. Default: direct */
   reviewTransport?: ReviewTransport;
   /** Flush memories before compaction. Default: true */

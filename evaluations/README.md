@@ -36,7 +36,41 @@ Use multiple task families to prevent 403-specific overfitting: wrong package ma
 
 The Pi extension SDK supports `before_agent_start` for supplying targeted prior context, `tool_call` for inspecting/blocking a risky tool call, and `tool_result` for receiving failure evidence. A low-cost design can use these to schedule bounded, incremental learning and action-time recall without a large LLM review each N turns. A previous 403 is a *conditional* warning, not a permanent block: authorized permission changes must permit new probes.
 
-No GitHub fork or deployment has been created; this is a local working branch. Avoid pushing to the existing `origin`, which points to the upstream repository.
+The public fork is [mistrjirka/pi-eigen-memory](https://github.com/mistrjirka/pi-eigen-memory), installed on `master`. Keep the upstream remote separate from the user fork.
+
+## Lookup scaling and slow-lookup warnings
+
+The Eigen fork reports a warning when a relevant recall takes at least `eigenRecallWarnMs` milliseconds (default `150`, set `0` to disable). It includes **full elapsed time**, **lazy-init time**, and **SQLite search/ranking time**. Notifications are rate-limited to one per five minutes per Pi session, and never contain searched text or saved facts. A failed lookup does not block the calling tool.
+
+Benchmark the memory FTS5 search against temporary synthetic stores, without writing production memories:
+
+```sh
+npx tsx evaluations/benchmark-memory-scaling.ts
+```
+
+Measurements on `master` (Nov 13, 2026), median of 60 warm searches against synthetic text, all queries filtered to the same project:
+
+| Memory entries | Exact 403 (rare) | PiTTy term (common) | PiTTy multi-term (common) | No match |
+|---:|---:|---:|---:|---:|
+| 2,500 | 1.7 ms | 1.0 ms | 2.9 ms | 0.07 ms |
+| 10,000 | 3.4 ms | 3.4 ms | 9.4 ms | 0.06 ms |
+| 40,000 | 8.6 ms | 14.8 ms | 37.5 ms | 0.06 ms |
+| 100,000 | 16.6 ms | 45.6 ms | 105.8 ms | 0.07 ms |
+
+The table above describes the previous exhaustive BM25 path. The new Eigen automatic path caps FTS matching candidates to 256 (newest by rowid) and includes 96 recent project entries as a fallback. Each entry's content is truncated at 1,600 characters for ranking, and at most three distinct tool-error recalls run per user turn. Manual `memory_search` retains exhaustive BM25 ranking. This improves speed at a recall-quality tradeoff: an older broad-match memory outside the shortlist may be missed.
+
+Measured **end-to-end search plus Eigen's final hint ranking** with the implemented bounded path on the same test host (60 warm runs, temporary synthetic store):
+
+| Memory entries | Legacy multi-term median | Bounded Eigen multi-term median | Bounded P95 | Legacy broad single-term | Bounded broad single-term |
+|---:|---:|---:|---:|---:|---:|
+| 2,500 | 1.30 ms | 1.36 ms | 1.92 ms | 0.42 ms | 0.36 ms |
+| 10,000 | 4.25 ms | 1.39 ms | 2.50 ms | 1.44 ms | 0.36 ms |
+| 40,000 | 18.18 ms | 1.49 ms | 2.00 ms | 6.62 ms | 0.38 ms |
+| 100,000 | 51.34 ms | 1.60 ms | 2.18 ms | 24.46 ms | 0.40 ms |
+
+Use `npx tsx evaluations/benchmark-memory-scaling.ts` to reproduce both implementations. Results exclude DB initialization, UI handling and concurrent I/O. They are not hard wall-clock limits. Synchronous SQLite execution cannot be interrupted by a JS `Promise.race()` timer on the same event loop. A strict deadline would require an isolated worker or a SQLite progress/interrupt mechanism. This fork uses bounded FTS candidate traversal instead.
+
+Original session JSONL files are never deleted by recall. Index storage can still grow, especially with `sessionRetentionDays: 0` (the default, unlimited search history). Operators can set a retention window for the **searchable session index only**, but older sessions become absent from `session_search` until reindexed. The independent original JSONL files remain. Do not silently prune them, and do not treat a small recall candidate cap as a storage quota. Periodic duplication/supersession curation is a separate quality task.
 
 ## Eigen fork: actual Pi tool-result regression
 

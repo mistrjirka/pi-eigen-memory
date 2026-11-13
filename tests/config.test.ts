@@ -49,6 +49,16 @@ describe("loadConfig", () => {
     assert.strictEqual(config.sessionRetentionDays, 0);
     assert.deepStrictEqual(config.sessionIndexExclude, []);
     assert.strictEqual(config.quickCheckOnOpen, true);
+    assert.strictEqual(config.eigenRecallWarnMs, 150);
+  });
+
+  it("supports configuring the slow recall warning threshold and disabling it", () => {
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ eigenRecallWarnMs: 275 }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).eigenRecallWarnMs, 275);
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ eigenRecallWarnMs: 0 }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).eigenRecallWarnMs, 0);
+    fs.writeFileSync(TEST_CONFIG_PATH, JSON.stringify({ eigenRecallWarnMs: -1 }));
+    assert.strictEqual(loadConfig(TEST_CONFIG_PATH).eigenRecallWarnMs, 150);
   });
 
   it("honors consolidationChunkChars", () => {

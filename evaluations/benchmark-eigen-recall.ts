@@ -37,7 +37,8 @@ try{
  await measure('success_read_8MiB',15,()=>({toolName:'read',isError:false,content:[{type:'text',text:'x'.repeat(8*1024*1024)}]}));
  await measure('first_relevant_error',1,()=>({toolName:'bash',isError:true,content:[{type:'text',text:sample}]}));
  await measure('repeated_same_error',100,()=>({toolName:'bash',isError:true,content:[{type:'text',text:sample}]}));
- await measure('unique_relevant_error',60,(i)=>({toolName:'bash',isError:true,content:[{type:'text',text:`${sample} unique_event_${i}` }]}));
+ await measure('unique_error_single_turn_capped',60,(i)=>({toolName:'bash',isError:true,content:[{type:'text',text:`${sample} unique_event_${i}` }]}));
+ await measure('unique_error_first_per_turn',30,(i)=>({toolName:'bash',isError:true,content:[{type:'text',text:`${sample} new_turn_${i}` }]}),true);
  // Explicitly compare successful prompt-time injection; no LLM call occurs.
  const pTimes:number[]=[];let promptsWithHint=0;
  for(let i=0;i<40;i++){

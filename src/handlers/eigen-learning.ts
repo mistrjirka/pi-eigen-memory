@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { DatabaseManager } from '../store/db.js';
 import type { MemoryStore } from '../store/memory-store.js';
-import { searchMemories } from '../store/sqlite-memory-store.js';
+import { searchEigenMemoriesBounded } from '../store/sqlite-memory-store.js';
 import { scanContent } from '../store/content-scanner.js';
 import { getMessageText, type MemoryConfig } from '../types.js';
 import { isCorrection } from './correction-detector.js';
@@ -162,7 +162,14 @@ export function setupEigenLearning(
         let candidates: string[] = [];
         try {
           const query = tokens.slice(0, 6).join(' ');
-          if (query) candidates = searchMemories(dbManager, query, {project:name, limit:3}).map(m => m.content);
+          if (query) candidates = searchEigenMemoriesBounded(dbManager, query, {
+            project: name, maxCandidates: 128, recentProjectCandidates: 48,
+          }).filter(entry => {
+            // Filter out unrelated project notes returned by the recent-sample fallback.
+            const lowercase = entry.content.toLowerCase();
+            const queryTokens = query.toLowerCase().split(/\s+/).filter(token => token.length >= 4);
+            return queryTokens.filter(token => lowercase.includes(token)).length >= 2;
+          }).slice(0, 3).map(entry => entry.content);
         } catch { /* retrieval is optional */ }
         memoryCandidates = candidates.length;
         const entries = ctx.sessionManager.getBranch();
