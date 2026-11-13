@@ -38,6 +38,14 @@ export interface MemoryConfig {
   reviewRecentMessages?: number;
   /** Enable background learning loop. Default: true */
   reviewEnabled: boolean;
+  /** Eigen fork: replace periodic background review with event-driven bounded reviews. */
+  eigenLearningEnabled?: boolean;
+  /** Maximum LLM prompt characters for one event review. Default 7000. */
+  eigenLearningMaxChars?: number;
+  /** Debounce automatic learning in milliseconds. Default 45000. */
+  eigenLearningCooldownMs?: number;
+  /** Append relevant prior failure context to failed tool results. */
+  eigenRecallEnabled?: boolean;
   /** How background review invokes the LLM. Default: direct */
   reviewTransport?: ReviewTransport;
   /** Flush memories before compaction. Default: true */

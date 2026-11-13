@@ -4,8 +4,8 @@
  * `npx tsx evaluations/dataverse-403.ts --learn` also makes two tool-free
  * model calls to evaluate old/new memory extraction on a sanitized incident.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -96,11 +96,13 @@ function runRetrieval(memories:string[], noisy=false){
   }finally{db.close();rmSync(temp,{recursive:true,force:true});}
 }
 async function callModel(system:string,user:string){
-  const cmd=['--no-extensions','--no-mcp','--no-skills','--no-tools','--no-context-files','--no-session','--mode','text','--model','opencode-go/muse-spark-1.3-contributor','--thinking','minimal','--system-prompt',system,'-p','--',user];
+  const tmpAgent=mkdtempSync(join(tmpdir(),'pi-eigen-model-agent-'));
+  for(const name of ['auth.json','models.json']) symlinkSync(join(homedir(),'.pi','agent',name),join(tmpAgent,name));
+  const cmd=['--no-extensions','--no-mcp','--no-skills','--no-tools','--no-context-files','--no-session','--mode','text','--model','opencode-go/muse-spark-1.3-contributor','--thinking','off','--system-prompt',system,'-p','--',user];
   const start=performance.now();
-  try{const {stdout,stderr}=await execFileAsync('pi',cmd,{timeout:45_000,maxBuffer:1_000_000,env:process.env});
+  try{const {stdout,stderr}=await execFileAsync('pi',cmd,{timeout:45_000,maxBuffer:1_000_000,env:{...process.env,PI_CODING_AGENT_DIR:tmpAgent}});
     return {elapsedMs:Math.round(performance.now()-start),operations:parseOperations(stdout),raw:stdout.slice(0,1700),error:stderr.slice(0,600)};
-  }catch(e){return {elapsedMs:Math.round(performance.now()-start),operations:[],raw:'',error:JSON.stringify({message:String((e as any).message).slice(0,180),stderr:String((e as any).stderr??'').slice(0,240),killed:(e as any).killed,signal:(e as any).signal})}}
+  }catch(e){return {elapsedMs:Math.round(performance.now()-start),operations:[],raw:'',error:JSON.stringify({message:String((e as any).message).slice(0,180),stderr:String((e as any).stderr??'').slice(0,240),killed:(e as any).killed,signal:(e as any).signal})} finally {rmSync(tmpAgent,{recursive:true,force:true});}
 }
 console.log('FIXTURE: two dated, sanitized Dataverse observations, no real credentials or remote API calls');
 console.log('MODEL LEARNING: only Sep 30 observations are provided; Nov 11 evidence is held out.');

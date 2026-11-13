@@ -30,6 +30,8 @@ export interface DirectReviewResult {
   appliedCount: number;
   fallbackReason?: "no_model" | "no_auth" | "aborted" | "parse_error" | "provider_error" | "empty" | "empty_response";
   error?: string;
+  /** Actual provider-reported usage if available; does not infer tokens from character count. */
+  usage?: { input: number; output: number; cacheRead: number; costUsd?: number };
 }
 
 export interface RunDirectMemoryCompletionOptions {
@@ -40,6 +42,13 @@ export interface RunDirectMemoryCompletionOptions {
   signal?: AbortSignal;
   requireAtomicShrink?: boolean;
   expectedTarget?: ReviewMemoryOperation["target"];
+  /** Optional hard mutation limits for automated learning; other callers retain legacy behavior. */
+  operationLimits?: {
+    maxCount: number;
+    maxContentChars: number;
+    allowedTargets: ReviewMemoryOperation['target'][];
+    allowedActions: ReviewMemoryOperation['action'][];
+  };
 }
 
 /** Shared transport gate: review/flush/consolidation/correction all default to
@@ -935,9 +944,24 @@ export async function runDirectMemoryCompletion(
         if (mi < models.length - 1) { clearTimeout(timeout); continue; }
         return lastResult;
       }
+      const modelUsage = response.usage ? {
+        input: response.usage.input ?? 0,
+        output: response.usage.output ?? 0,
+        cacheRead: response.usage.cacheRead ?? 0,
+        costUsd: response.usage.cost?.total,
+      } : undefined;
+      if (operations && options.operationLimits) {
+        const limits = options.operationLimits;
+        operations = operations.slice(0, Math.max(0, limits.maxCount)).filter(op =>
+          limits.allowedTargets.includes(op.target)
+          && limits.allowedActions.includes(op.action)
+          && (!op.content || op.content.length <= limits.maxContentChars)
+          && (!op.old_text || op.old_text.length <= limits.maxContentChars)
+        );
+      }
       if (operations.length === 0) {
         clearTimeout(timeout);
-        return { ok: true, appliedCount: 0, fallbackReason: "empty" };
+        return { ok: true, appliedCount: 0, fallbackReason: "empty", ...(modelUsage ? { usage: modelUsage } : {}) };
       }
       if (controller.signal.aborted || options.signal?.aborted) {
         return aborted();
@@ -969,7 +993,7 @@ export async function runDirectMemoryCompletion(
         return lastResult;
       }
       clearTimeout(timeout);
-      return { ok: true, appliedCount: applied.appliedCount };
+      return { ok: true, appliedCount: applied.appliedCount, ...(modelUsage ? { usage: modelUsage } : {}) };
     } catch (err) {
       if (options.signal?.aborted) {
         clearTimeout(timeout);

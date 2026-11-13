@@ -154,6 +154,10 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.nudgeInterval === "number") config.nudgeInterval = parsed.nudgeInterval;
       if (isNonNegativeNumber(parsed.reviewRecentMessages)) config.reviewRecentMessages = parsed.reviewRecentMessages;
       if (typeof parsed.reviewEnabled === "boolean") config.reviewEnabled = parsed.reviewEnabled;
+      if (typeof parsed.eigenLearningEnabled === "boolean") config.eigenLearningEnabled = parsed.eigenLearningEnabled;
+      if (typeof parsed.eigenRecallEnabled === "boolean") config.eigenRecallEnabled = parsed.eigenRecallEnabled;
+      if (isNonNegativeNumber(parsed.eigenLearningMaxChars)) config.eigenLearningMaxChars = Math.max(1500, Math.min(12000, parsed.eigenLearningMaxChars));
+      if (isNonNegativeNumber(parsed.eigenLearningCooldownMs)) config.eigenLearningCooldownMs = Math.min(3600000, parsed.eigenLearningCooldownMs);
       if (isReviewTransport(parsed.reviewTransport)) config.reviewTransport = parsed.reviewTransport;
       if (typeof parsed.flushOnCompact === "boolean") config.flushOnCompact = parsed.flushOnCompact;
       if (typeof parsed.flushOnShutdown === "boolean") config.flushOnShutdown = parsed.flushOnShutdown;

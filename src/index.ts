@@ -38,6 +38,8 @@ import { registerSkillTool } from "./tools/skill-tool.js";
 import { registerSessionSearchTool } from "./tools/session-search-tool.js";
 import { registerMemorySearchTool } from "./tools/memory-search-tool.js";
 import { setupBackgroundReview } from "./handlers/background-review.js";
+import { setupEigenLearning } from "./handlers/eigen-learning.js";
+import { setupEigenRecall } from "./handlers/eigen-recall.js";
 import { setupSessionFlush } from "./handlers/session-flush.js";
 import { registerInsightsCommand } from "./handlers/insights.js";
 import { triggerConsolidation, registerConsolidateCommand } from "./handlers/auto-consolidate.js";
@@ -345,11 +347,15 @@ export default function (pi: ExtensionAPI) {
   if (config.skillsEnabled) registerSkillTool(pi, skillStore);
 
   // ── 5. Setup background learning loop (with tool-call-aware nudge) ──
+  if (config.eigenLearningEnabled) {
+    setupEigenLearning(pi, store, projectStoreRef, config, dbManager, projectNameRef, { ensureMemoryReady });
+  } else {
   setupBackgroundReview(pi, store, projectStoreRef, config, {
-    dbManager,
-    projectName: projectNameRef,
-    ensureMemoryReady,
-  });
+      dbManager,
+      projectName: projectNameRef,
+      ensureMemoryReady,
+    });
+  }
 
   // ── 6. Setup session-end flush ──
   setupSessionFlush(pi, store, projectStoreRef, config, dbManager, projectNameRef, { ensureMemoryReady });
@@ -394,7 +400,7 @@ export default function (pi: ExtensionAPI) {
   registerConsolidateCommand(memoryPi, store, config.consolidationTimeoutMs, projectStoreRef, projectNameRef, config, dbManager);
 
   // ── 8. Setup correction detection ──
-  setupCorrectionDetector(pi, store, projectStoreRef, config, dbManager, projectNameRef, { ensureMemoryReady });
+  if (!config.eigenLearningEnabled) setupCorrectionDetector(pi, store, projectStoreRef, config, dbManager, projectNameRef, { ensureMemoryReady });
 
   // ── 9. Register commands ──
   registerInsightsCommand(memoryPi, store, projectStoreRef, projectNameRef, dbManager);
@@ -416,6 +422,9 @@ export default function (pi: ExtensionAPI) {
       onError: (err) => reportLiveSessionIndexError(err, (message) => console.warn(message)),
     });
   });
+
+  // ── Eigen fork: scoped just-in-time recall, no extra model calls ──
+  setupEigenRecall(pi, dbManager, config, projectNameRef, { ensureMemoryReady });
 
   // ── 11. SQLite session search + extended memory ──
   registerSessionSearchTool(config.sessionSearch?.variant === "anchors" ? pi : memoryPi,

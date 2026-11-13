@@ -23,6 +23,35 @@ Your Pi agent normally forgets everything when you close a session. **This exten
 - ⚡ **Background learning** — reviews every 10 turns, saves what matters
 - 🔄 **Auto-consolidation** — merges entries when full, never loses data
 
+## Pi Eigen Memory fork
+
+Source: [mistrjirka/pi-eigen-memory](https://github.com/mistrjirka/pi-eigen-memory). This fork preserves the existing Hermes SQLite/Markdown memory format and fixes costly full-session live indexing. The following features are opt-in, so upstream installations retain their previous defaults:
+
+- **Event-driven learning:** after a user correction, explicit durable decision or actual tool failure, an asynchronous Muse Spark review gets at most 7,000 characters of recent context. No periodic whole-history review. At most two validated memory mutations of 500 characters each.
+- **Just-in-time recall:** a relevant user request or failed tool result can receive up to three recent, project-scoped memory hints. This path uses SQLite only, not another model call. Memories are historical context, not permission enforcement.
+- **Measured usage:** each learning event writes duration, input size, model, provider-reported tokens/cost (when available) and applied operations to `eigen-learning-metrics.jsonl` in the existing memory directory. No conversation text is logged there.
+- **Regression testing:** `tests/handlers/eigen-*.test.ts`, `tests/evals/dataverse-403.test.ts` and `evaluations/README.md`. These include the real Dataverse `403` incident, later contact-read recovery and stale-result ranking.
+
+Install with `pi install git:github.com/mistrjirka/pi-eigen-memory`, then configure `~/.pi/agent/hermes-memory-config.json`:
+
+```json
+{
+  "reviewEnabled": true,
+  "eigenLearningEnabled": true,
+  "eigenRecallEnabled": true,
+  "eigenLearningMaxChars": 7000,
+  "eigenLearningCooldownMs": 45000,
+  "llmModelOverride": "opencode-go/muse-spark-1.3-contributor",
+  "llmThinkingOverride": "off",
+  "reviewTransport": "direct",
+  "correctionDetection": false,
+  "flushOnCompact": false,
+  "flushOnShutdown": false
+}
+```
+
+`eigenLearningEnabled` replaces the old periodic review and correction-detector hooks. To use the old learning logic instead, set it to `false`. `quickCheckOnOpen=false` can reduce the first SQLite open by roughly 1.5 seconds on a large index, but requires an independent integrity-check routine. All legacy memories remain readable. Background learning is best-effort; it never authorizes bypassing service permissions.
+
 ## Quick Start
 
 ```bash
