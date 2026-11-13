@@ -139,6 +139,33 @@ describe("provider auth resolution", () => {
     );
   }
 
+  it("distinguishes empty, invalid, and filtered operations without saving raw output", async () => {
+    const cases = [
+      { operations: [], reason: "empty", diagnostics: { supplied: 0, parsed: 0, accepted: 0 } },
+      { operations: [{ action: "add", target: "SBHG-Buddy", content: "unsafe arbitrary target" }], reason: "invalid_operations", diagnostics: { supplied: 1, parsed: 0, accepted: 0 } },
+      { operations: [{ action: "replace", target: "project", old_text: "old", content: "new" }], reason: "filtered", diagnostics: { supplied: 1, parsed: 1, accepted: 0 } },
+    ];
+    for (const scenario of cases) {
+      const response = { stopReason: "stop", content: [{ type: "text", text: JSON.stringify({ operations: scenario.operations }) }] };
+      const result = await runDirectMemoryCompletion(
+        { model: mockModel(false), modelRegistry: registryWithAuthResponses("dummy").modelRegistry } as never,
+        null as never, null,
+        {
+          ...directOptions(),
+          operationLimits: {
+            maxCount: 2, maxContentChars: 500,
+            allowedTargets: ["project", "failure"], allowedActions: ["add"],
+          },
+        }, null, null,
+        { completeSimple: async () => response as never },
+      );
+      assert.equal(result.ok, true);
+      assert.equal(result.appliedCount, 0);
+      assert.equal(result.fallbackReason, scenario.reason);
+      assert.deepStrictEqual(result.operationDiagnostics, scenario.diagnostics);
+    }
+  });
+
   it("resolves credentials through the public registry API", async () => {
     const registry = registryWithAuthResponses("current-key");
     const { usedKeys, complete } = completionStub(() => emptyOperations);

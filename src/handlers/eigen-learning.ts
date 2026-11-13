@@ -18,6 +18,7 @@ export type EigenLearningReport = {
   reason: string; model: string; inputChars: number; memoryCandidates: number;
   elapsedMs: number; applied: number; result: string; timestamp: string;
   usage?: { input: number; output: number; cacheRead: number; costUsd?: number };
+  operationDiagnostics?: { supplied: number; parsed: number; accepted: number };
 };
 
 const DEFAULT_MAX_CHARS = 7000;
@@ -185,8 +186,10 @@ export function setupEigenLearning(
         if (!closed) await report({
           reason: batch.map(s=>s.kind).join(','), model: config.llmModelOverride ?? 'active',
           inputChars, memoryCandidates, elapsedMs: Math.max(0, now()-started),
-          applied: result?.appliedCount ?? 0, result: result?.ok ? 'ok' : (result?.fallbackReason ?? 'error'),
-          usage: result?.usage, timestamp: new Date().toISOString(),
+          applied: result?.appliedCount ?? 0,
+          result: result?.appliedCount ? 'saved' : (result?.fallbackReason ?? (result?.ok ? 'no_change' : 'error')),
+          usage: result?.usage, operationDiagnostics: result?.operationDiagnostics,
+          timestamp: new Date().toISOString(),
         });
       }
     })().finally(() => {

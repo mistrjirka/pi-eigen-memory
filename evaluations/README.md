@@ -37,3 +37,34 @@ Use multiple task families to prevent 403-specific overfitting: wrong package ma
 The Pi extension SDK supports `before_agent_start` for supplying targeted prior context, `tool_call` for inspecting/blocking a risky tool call, and `tool_result` for receiving failure evidence. A low-cost design can use these to schedule bounded, incremental learning and action-time recall without a large LLM review each N turns. A previous 403 is a *conditional* warning, not a permanent block: authorized permission changes must permit new probes.
 
 No GitHub fork or deployment has been created; this is a local working branch. Avoid pushing to the existing `origin`, which points to the upstream repository.
+
+## Eigen fork: actual Pi tool-result regression
+
+Run these from the repository after dependencies are installed:
+
+```sh
+# Real SQLite search engine, read-only production index, warm hook timings
+npx tsx evaluations/benchmark-eigen-recall.ts
+
+# Real Pi agent calls an offline replay tool, learns with the configured model,
+# then retrieves the memory in the next turn, using temporary memory storage
+python evaluations/e2e-dataverse-tool-learning.py 3
+```
+
+The end-to-end replay uses the **recorded historical statuses** (ordinary incident/contact records HTTP 200, attribute metadata HTTP 403 missing `prvReadEntity`). It makes no Dataverse network requests and does not write to `~/.pi/agent/pi-hermes-memory`. Each trial creates a temporary Pi agent directory, reuses the operator's existing model authentication, and deletes the temporary directory. It does make paid or quota-limited requests to the configured learning model.
+
+Measured on `master` on Nov 13 with `opencode-go/muse-spark-1.3-contributor`: **3/3** historical replay runs saved the correct scoped lesson and **3/3** recalled it correctly in the next turn. The learning calls took 4.4–8.4 seconds asynchronously, cost estimate $0.00021–$0.00024 each. When the tool instead explicitly said the error was **simulated** and that no real API request occurred, three runs returned **zero memory operations**. That is an observed difference, not proof of why the model chose to save nothing.
+
+`eigen-learning-metrics.jsonl` now distinguishes an actual save from `empty`, `invalid_operations`, `filtered` and other results. It reports operation counts (`supplied`, `parsed`, `accepted`) without storing raw conversation text. A completed model request with `applied=0` is **not** counted as successful learning.
+
+Warm recall callback measurements against the existing ~124 MiB SQLite index:
+
+| Scenario | Median | P95 |
+|---|---:|---:|
+| Successful short tool result | 0.001 ms | 0.003 ms |
+| Successful 8 MiB bash output | 0.371 ms | 0.431 ms |
+| Unique relevant error | 12.77 ms | 13.90 ms |
+| Repeated identical error | 0.01 ms | 0.017 ms |
+| Relevant request prefetch | 5.27 ms | 5.56 ms |
+
+A separate instrumented **real Pi RPC** run on a disposable copy of the same memory DB measured ~149 ms on the first relevant tool result (cold lazy initialization) and ~24 ms on the second result. These figures measure hook processing, not network or main model time. Learning is scheduled asynchronously after the agent turn; it can still consume shared model/provider resources while another request is running.

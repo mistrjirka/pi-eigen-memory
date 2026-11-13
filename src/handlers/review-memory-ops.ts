@@ -28,7 +28,9 @@ export interface ApplyReviewOperationsResult {
 export interface DirectReviewResult {
   ok: boolean;
   appliedCount: number;
-  fallbackReason?: "no_model" | "no_auth" | "aborted" | "parse_error" | "provider_error" | "empty" | "empty_response";
+  fallbackReason?: "no_model" | "no_auth" | "aborted" | "parse_error" | "provider_error" | "empty" | "empty_response" | "filtered" | "invalid_operations";
+  /** Counts only, with no model output or memory contents. Populated for constrained reviews. */
+  operationDiagnostics?: { supplied: number; parsed: number; accepted: number };
   error?: string;
   /** Actual provider-reported usage if available; does not infer tokens from character count. */
   usage?: { input: number; output: number; cacheRead: number; costUsd?: number };
@@ -904,10 +906,14 @@ export async function runDirectMemoryCompletion(
       // keeps the shared cascade untouched so today's parse successes do not
       // move.
       let operations: ReviewMemoryOperation[] | null;
+      let suppliedCount = 0;
       let unparsableThinking = false;
       if (source === "thinking") {
         const extraction = extractThinkingOperations(text);
         if (extraction) {
+          if (options.operationLimits && Array.isArray(extraction.payload.operations)) {
+            suppliedCount = extraction.payload.operations.length;
+          }
           operations = mapOperationsArray(extraction.payload.operations) ?? [];
           // A candidate that is not trailing is draft-grade: apply only its
           // adds. Trusting a draft's replace/remove — or reaching back to an
@@ -923,6 +929,10 @@ export async function runDirectMemoryCompletion(
         }
       } else {
         operations = parseReviewOperations(text);
+        if (options.operationLimits) {
+          const rawOperations = extractJsonPayload(text)?.operations;
+          if (Array.isArray(rawOperations)) suppliedCount = rawOperations.length;
+        }
       }
 
       // A clean stop with no usable output — nothing in either channel, or
@@ -950,6 +960,7 @@ export async function runDirectMemoryCompletion(
         cacheRead: response.usage.cacheRead ?? 0,
         costUsd: response.usage.cost?.total,
       } : undefined;
+      const parsedCount = operations.length;
       if (operations && options.operationLimits) {
         const limits = options.operationLimits;
         operations = operations.slice(0, Math.max(0, limits.maxCount)).filter(op =>
@@ -959,9 +970,19 @@ export async function runDirectMemoryCompletion(
           && (!op.old_text || op.old_text.length <= limits.maxContentChars)
         );
       }
+      const operationDiagnostics = options.operationLimits
+        ? { supplied: suppliedCount, parsed: parsedCount, accepted: operations.length }
+        : undefined;
       if (operations.length === 0) {
         clearTimeout(timeout);
-        return { ok: true, appliedCount: 0, fallbackReason: "empty", ...(modelUsage ? { usage: modelUsage } : {}) };
+        const fallbackReason = operationDiagnostics && suppliedCount > 0 && parsedCount === 0
+          ? "invalid_operations"
+          : parsedCount > 0 ? "filtered" : "empty";
+        return {
+          ok: true, appliedCount: 0, fallbackReason,
+          ...(modelUsage ? { usage: modelUsage } : {}),
+          ...(operationDiagnostics ? { operationDiagnostics } : {}),
+        };
       }
       if (controller.signal.aborted || options.signal?.aborted) {
         return aborted();
@@ -993,7 +1014,11 @@ export async function runDirectMemoryCompletion(
         return lastResult;
       }
       clearTimeout(timeout);
-      return { ok: true, appliedCount: applied.appliedCount, ...(modelUsage ? { usage: modelUsage } : {}) };
+      return {
+        ok: true, appliedCount: applied.appliedCount,
+        ...(modelUsage ? { usage: modelUsage } : {}),
+        ...(operationDiagnostics ? { operationDiagnostics } : {}),
+      };
     } catch (err) {
       if (options.signal?.aborted) {
         clearTimeout(timeout);
