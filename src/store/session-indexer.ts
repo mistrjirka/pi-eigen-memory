@@ -260,17 +260,33 @@ export function indexLiveSession(dbManager: DatabaseManager, sessionManager: Ses
 
 function indexLiveSessionOnce(dbManager: DatabaseManager, sessionManager: SessionManagerSnapshot): IndexResult | null {
   const sessionFile = sessionManager.getSessionFile?.();
+  // Ephemeral review subprocesses have no persisted provenance and must never
+  // enter the searchable session index.
   if (sessionManager.getSessionFile && !sessionFile) return null;
+
+  // The running SessionManager already holds the persisted session entries.
+  // Reading its snapshot costs milliseconds, whereas reparsing a long JSONL
+  // on every message_end can synchronously block the Pi event loop for seconds.
+  const snapshot = parseSessionManagerSnapshot(sessionManager);
+  if (snapshot && snapshot.messages.length > 0) {
+    const result = indexSession(dbManager, snapshot);
+    if (sessionFile && fs.existsSync(sessionFile)) {
+      upsertSessionFileMetadata(dbManager, sessionFile, snapshot.id);
+    }
+    return result;
+  }
+
+  // Compatibility path for stale/empty manager snapshots and legacy callers.
+  // A normal active session should never need to reread its own JSONL file.
   if (sessionFile && fs.existsSync(sessionFile)) {
-    const session = parseSessionFile(sessionFile);
-    if (session) {
-      const result = indexSession(dbManager, session);
-      upsertSessionFileMetadata(dbManager, sessionFile, session.id);
+    const persisted = parseSessionFile(sessionFile);
+    if (persisted) {
+      const result = indexSession(dbManager, persisted);
+      upsertSessionFileMetadata(dbManager, sessionFile, persisted.id);
       return result;
     }
   }
-
-  return indexCurrentSession(dbManager, sessionManager);
+  return snapshot ? indexSession(dbManager, snapshot) : null;
 }
 
 /**

@@ -527,6 +527,32 @@ describe('session-indexer', () => {
       assert.strictEqual(indexed.cwd, '/work/file-project');
     });
 
+    it('indexes the live snapshot without rereading a large persisted session file', () => {
+      const filePath = path.join(tmpDir, 'sessions', 'project', 'active-session.jsonl');
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      // The stale/malformed disk payload must not be parsed when the session
+      // manager supplies its authoritative, already-persisted live messages.
+      fs.writeFileSync(filePath,
+        JSON.stringify({ type: 'session', id: 'active-session', timestamp: '2026-05-03T00:00:00Z', cwd: '/work/live-project' }) +
+        '\\n' + 'INVALID_DISK_PAYLOAD'.repeat(1000));
+      const snapshot = {
+        getHeader: () => ({ id: 'live-session-1', timestamp: '2026-05-03T00:00:00Z', cwd: '/work/live-project' }),
+        getEntries: () => [{
+          type: 'message', id: 'live-message',
+          timestamp: '2026-05-03T00:01:00Z',
+          message: { role: 'assistant', content: [{ type: 'text', text: 'New persisted live result' }] },
+        }],
+        getSessionFile: () => filePath,
+      };
+      const result = indexLiveSession(dbManager, snapshot);
+      assert.strictEqual(result?.sessionId, 'live-session-1');
+      assert.strictEqual(result?.messagesIndexed, 1);
+      const row = dbManager.getDb().prepare('SELECT content FROM messages WHERE id = ?').get('live-message') as { content: string };
+      assert.strictEqual(row.content, 'New persisted live result');
+      const metadata = dbManager.getDb().prepare('SELECT session_id FROM session_files WHERE path = ?').get(filePath) as { session_id: string };
+      assert.strictEqual(metadata.session_id, 'live-session-1');
+    });
+
     it('does not index a session without persisted file provenance', () => {
       const result = indexLiveSession(dbManager, {
         getHeader: () => ({ id: 'ephemeral-review', timestamp: '2026-05-03T00:00:00Z', cwd: '/tmp/review' }),
