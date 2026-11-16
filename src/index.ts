@@ -412,8 +412,13 @@ export default function (pi: ExtensionAPI) {
   registerPreviewContextCommand(lazy ? pi : memoryPi, store, projectStoreRef, projectNameRef, config, standingStore);
   if (standingStore) registerStandingPinCommand(pi, standingStore);
 
-  // ── 10. Live session indexing ──
-  pi.on("message_end", async (_event, ctx) => {
+  // ── 10. Index the completed session without blocking tool -> model handoffs ──
+  // Live indexing is synchronous SQLite work (including FTS updates), even
+  // when its timer fires asynchronously. Running it on message_end can stall
+  // both tool dispatch and the next provider request. The active agent already
+  // has its own conversation context, so index after it becomes idle instead.
+  // Shutdown also indexes the final session and startup backfill covers crashes.
+  pi.on("agent_end", async (_event, ctx) => {
     // Cold lazy sessions remain in Pi's JSONL files and are backfilled on use.
     if (lazy && !initialization.isReady()) return;
     scheduleLiveSessionIndex(dbManager, ctx.sessionManager, {

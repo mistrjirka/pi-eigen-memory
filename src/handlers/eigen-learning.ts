@@ -46,12 +46,18 @@ export function safeEigenExcerpt(text: string, maxChars = MAX_SIGNAL_CHARS): str
 }
 
 export function eigenSignalForTool(event: { toolName: string; isError: boolean; content?: unknown }): EigenSignal | null {
-  const content = Array.isArray(event.content) ? event.content : [];
-  const text = content.filter((part): part is { type: string; text: string } => (
-    !!part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string'
-  )).map(part => part.text).join('\n');
+  // Learning and recall both inspect each result. Never join unbounded outputs.
   if (!event.isError && ['read', 'grep', 'find', 'ls', 'edit', 'write'].includes(event.toolName)) return null;
-  if (!event.isError && !STATUS_PATTERN.test(text.slice(0, 1600))) return null;
+  const content = Array.isArray(event.content) ? event.content : [];
+  const scanLimit = event.isError ? 4096 : 1600;
+  let text = '';
+  for (const part of content) {
+    if (!part || typeof part !== 'object' || part.type !== 'text' || typeof part.text !== 'string') continue;
+    if (text) text += '\n';
+    text += part.text.slice(0, Math.max(0, scanLimit - text.length));
+    if (text.length >= scanLimit) break;
+  }
+  if (!event.isError && !STATUS_PATTERN.test(text)) return null;
   const excerpt = safeEigenExcerpt(text);
   return { kind: 'error', detail: `${event.toolName}: ${excerpt}`.slice(0, MAX_SIGNAL_CHARS) };
 }

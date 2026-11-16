@@ -23,6 +23,10 @@ describe('Eigen event-driven learner',()=>{
     assert.equal(eigenSignalForTool({toolName:'bash',isError:false,content:[{type:'text',text:'GET /incidents 200'}]}),null);
     assert.equal(eigenSignalForTool({toolName:'bash',isError:false,content:[{type:'text',text:'const error = new Error("test");'}]}),null);
     assert.equal(eigenSignalForTool({toolName:'read',isError:false,content:[{type:'text',text:'// HTTP 403 expected in fixture'}]}),null);
+    const huge = 'x'.repeat(4_000_000);
+    assert.equal(eigenSignalForTool({toolName:'read',isError:false,content:[{type:'text',text:huge}]}),null);
+    assert.equal(eigenSignalForTool({toolName:'bash',isError:false,content:[{type:'text',text:huge+' HTTP 403'}]}),null,
+      'status beyond the first 1600 characters must not trigger recall');
     const result=eigenSignalForTool({toolName:'bash',isError:false,content:[{type:'text',text:'contact-attribute-metadata status=403 code=0x80040220'}]});
     assert.match(result?.detail??'',/403.*0x80040220/);
   });

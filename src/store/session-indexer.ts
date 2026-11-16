@@ -159,8 +159,17 @@ function indexSessionOnce(dbManager: DatabaseManager, session: ParsedSession): I
 type SessionManagerSnapshot = {
   getHeader: () => { id: string; timestamp: string; cwd: string } | null;
   getEntries: () => unknown[];
+  /** Pi provides an O(1) count so unchanged sessions need no array copy. */
+  getEntryCount?: () => number;
   getSessionFile?: () => string | undefined;
 };
+
+/** Pi session entries are append-only. Track only entries successfully indexed. */
+const liveIndexOffsets = new WeakMap<SessionManagerSnapshot, {
+  database: DatabaseManager;
+  sessionId: string;
+  entryCount: number;
+}>();
 
 type SessionMessageEntryLike = {
   type?: unknown;
@@ -264,15 +273,31 @@ function indexLiveSessionOnce(dbManager: DatabaseManager, sessionManager: Sessio
   // enter the searchable session index.
   if (sessionManager.getSessionFile && !sessionFile) return null;
 
-  // The running SessionManager already holds the persisted session entries.
-  // Reading its snapshot costs milliseconds, whereas reparsing a long JSONL
-  // on every message_end can synchronously block the Pi event loop for seconds.
-  const snapshot = parseSessionManagerSnapshot(sessionManager);
-  if (snapshot && snapshot.messages.length > 0) {
-    const result = indexSession(dbManager, snapshot);
+  // Index only appended entries. Previously we resubmitted every old message
+  // and re-ran hundreds/thousands of SQLite INSERT OR IGNORE statements on
+  // every update, blocking the agent loop even for unchanged conversations.
+  const header = sessionManager.getHeader();
+  const cursor = liveIndexOffsets.get(sessionManager);
+  const sameSession = Boolean(cursor && cursor.database === dbManager && cursor.sessionId === header?.id);
+  const knownCount = sessionManager.getEntryCount?.();
+  if (sameSession && knownCount === cursor!.entryCount) return null;
+
+  const entries = sessionManager.getEntries();
+  if (sameSession && entries.length === cursor!.entryCount) return null;
+  const firstNew = sameSession && entries.length >= cursor!.entryCount ? cursor!.entryCount : 0;
+  const snapshot = parseSessionManagerSnapshot({
+    getHeader: () => header,
+    getEntries: () => entries.slice(firstNew),
+  });
+
+  if (snapshot && (snapshot.messages.length > 0 || sameSession)) {
+    const result = snapshot.messages.length > 0
+      ? indexSession(dbManager, snapshot)
+      : { sessionId: snapshot.id, messagesIndexed: 0, skipped: true };
     if (sessionFile && fs.existsSync(sessionFile)) {
       upsertSessionFileMetadata(dbManager, sessionFile, snapshot.id);
     }
+    liveIndexOffsets.set(sessionManager, { database: dbManager, sessionId: snapshot.id, entryCount: entries.length });
     return result;
   }
 

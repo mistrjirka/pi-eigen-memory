@@ -553,6 +553,53 @@ describe('session-indexer', () => {
       assert.strictEqual(metadata.session_id, 'live-session-1');
     });
 
+    it('indexes only newly appended messages and skips unchanged snapshots', () => {
+      const entries: unknown[] = [{
+        type: 'message', id: 'new-1', timestamp: '2026-05-03T00:01:00Z',
+        message: { role: 'user', content: 'one' },
+      }];
+      let snapshots = 0;
+      const manager = {
+        getHeader: () => ({ id: 'incremental-session', timestamp: '2026-05-03T00:00:00Z', cwd: '/work/fast' }),
+        getEntryCount: () => entries.length,
+        getEntries: () => { snapshots++; return [...entries]; },
+      };
+      assert.strictEqual(indexLiveSession(dbManager, manager)?.messagesIndexed, 1);
+      assert.strictEqual(indexLiveSession(dbManager, manager), null);
+      assert.strictEqual(snapshots, 1, 'unchanged session must not copy the entire session');
+      entries.push({
+        type: 'message', id: 'new-2', timestamp: '2026-05-03T00:02:00Z',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'two' }] },
+      });
+      assert.strictEqual(indexLiveSession(dbManager, manager)?.messagesIndexed, 1);
+      assert.strictEqual(dbManager.getStats().messages, 2);
+      assert.strictEqual(indexLiveSession(dbManager, manager), null);
+      assert.strictEqual(snapshots, 2);
+      entries.push({
+        type: 'message', id: 'new-3', timestamp: '2026-05-03T00:03:00Z',
+        message: { role: 'toolResult', content: [{ type: 'text', text: 'not indexed' }] },
+      });
+      assert.strictEqual(indexLiveSession(dbManager, manager)?.messagesIndexed, 0);
+      assert.strictEqual(indexLiveSession(dbManager, manager), null);
+      assert.strictEqual(dbManager.getStats().messages, 2);
+    });
+
+    it('resets the cursor if the session manager switches to a different session', () => {
+      let id = 'first';
+      const entries = [{
+        type: 'message', id: 'switch-message', timestamp: '2026-05-03T00:01:00Z',
+        message: { role: 'user', content: 'same message id' },
+      }];
+      const manager = {
+        getHeader: () => ({ id, timestamp: '2026-05-03T00:00:00Z', cwd: '/work/fast' }),
+        getEntryCount: () => entries.length,
+        getEntries: () => entries,
+      };
+      assert.strictEqual(indexLiveSession(dbManager, manager)?.messagesIndexed, 1);
+      id = 'second';
+      assert.strictEqual(indexLiveSession(dbManager, manager)?.sessionId, 'second');
+    });
+
     it('does not index a session without persisted file provenance', () => {
       const result = indexLiveSession(dbManager, {
         getHeader: () => ({ id: 'ephemeral-review', timestamp: '2026-05-03T00:00:00Z', cwd: '/tmp/review' }),
