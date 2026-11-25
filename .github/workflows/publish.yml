@@ -46,6 +46,7 @@ concurrency:
 
 jobs:
   verify:
+    if: github.repository == 'chandra447/pi-hermes-memory'
     name: Verify release
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -1,3 +1,4 @@
+import { decodeMemoryEntry, parseMemoryEvidence, type MemoryEvidence } from '../memory-evidence.js';
 import { createHash } from 'node:crypto';
 import { DatabaseManager } from './db.js';
 import {
@@ -23,6 +24,7 @@ const MEMORY_SELECT_COLUMNS = `
   failure_reason,
   tool_state,
   corrected_to,
+  evidence_json,
   created,
   last_referenced
 `;
@@ -55,6 +57,7 @@ export interface SqliteMemoryEntry {
   failureReason: string | null;
   toolState: string | null;
   correctedTo: string | null;
+  evidence?: MemoryEvidence;
   created: string;
   lastReferenced: string;
 }
@@ -67,6 +70,7 @@ export interface SqliteMemorySyncInput {
   failureReason?: string | null;
   toolState?: string | null;
   correctedTo?: string | null;
+  evidence?: MemoryEvidence;
   created?: string | null;
   lastReferenced?: string | null;
 }
@@ -163,6 +167,7 @@ function mapRow(row: {
   failure_reason: string | null;
   tool_state: string | null;
   corrected_to: string | null;
+  evidence_json?: string | null;
   created: string;
   last_referenced: string;
 }): SqliteMemoryEntry {
@@ -175,6 +180,7 @@ function mapRow(row: {
     failureReason: row.failure_reason,
     toolState: row.tool_state,
     correctedTo: row.corrected_to,
+    ...(parseMemoryEvidence(row.evidence_json) ? { evidence: parseMemoryEvidence(row.evidence_json) } : {}),
     created: row.created,
     lastReferenced: row.last_referenced,
   };
@@ -224,7 +230,8 @@ function buildSearchTargetConditions(params: unknown[], target: string | undefin
   return conditions;
 }
 
-function getMemoryById(dbManager: DatabaseManager, id: number): SqliteMemoryEntry | null {
+export function getMemoryById(dbManager: DatabaseManager, id: number): SqliteMemoryEntry | null {
+  if (!Number.isSafeInteger(id) || id < 1) return null;
   const db = dbManager.getDb();
   const row = db.prepare(`
     SELECT ${MEMORY_SELECT_COLUMNS}
@@ -261,32 +268,10 @@ function escapeLikePattern(text: string): string {
 function isShortCjkLiteralQuery(query: string): boolean {
   const trimmed = query.trim();
   return [...trimmed].length <= 2
-    && /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+$/u.test(trimmed);
+    && /^[\p{L}\p{N}_-]+$/u.test(trimmed);
 }
 
-function parseMetadataComment(raw: string): { text: string; created: string; lastReferenced: string; project: string | null } {
-  const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+)(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/s);
-  if (match) {
-    let project: string | null = null;
-    if (match[4]) {
-      try { project = Buffer.from(match[4], 'base64url').toString('utf-8').trim() || null; } catch {}
-    }
-    return {
-      text: match[1].trim(),
-      created: match[2].trim(),
-      lastReferenced: match[3].trim(),
-      project,
-    };
-  }
-
-  const fallback = today();
-  return {
-    text: raw.trim(),
-    created: fallback,
-    lastReferenced: fallback,
-    project: null,
-  };
-}
+function parseMetadataComment(raw: string) { return decodeMemoryEntry(raw); }
 
 /**
  * Add a memory entry to the SQLite store.
@@ -301,14 +286,15 @@ export function addMemory(
   toolState: string | null = null,
   correctedTo: string | null = null,
   created = today(),
-  lastReferenced = created
+  lastReferenced = created,
+  evidence?: MemoryEvidence
 ): SqliteMemoryEntry {
   const db = dbManager.getDb();
 
   const result = db.prepare(`
-    INSERT INTO memories (project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(project, target, category, content, failureReason, toolState, correctedTo, created, lastReferenced);
+    INSERT INTO memories (project, target, category, content, failure_reason, tool_state, corrected_to, created, last_referenced, evidence_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(project, target, category, content, failureReason, toolState, correctedTo, created, lastReferenced, evidence ? JSON.stringify(evidence) : null);
 
   return {
     id: Number(result.lastInsertRowid),
@@ -321,6 +307,7 @@ export function addMemory(
     correctedTo,
     created,
     lastReferenced,
+    ...(evidence ? { evidence } : {}),
   };
 }
 
@@ -366,6 +353,7 @@ export function parseMarkdownMemoryEntry(
       project: parsedProject,
       created,
       lastReferenced,
+      ...(metadata.evidence ? { evidence: metadata.evidence } : {}),
     };
   }
 
@@ -404,6 +392,7 @@ export function parseMarkdownMemoryEntry(
     correctedTo,
     created,
     lastReferenced,
+    ...(metadata.evidence ? { evidence: metadata.evidence } : {}),
   };
 }
 
@@ -447,6 +436,7 @@ export function syncMemoryEntry(
     corrected_to: string | null;
     created: string;
     last_referenced: string;
+    evidence_json?: string | null;
   } | undefined;
 
   if (!existing) {
@@ -463,6 +453,7 @@ export function syncMemoryEntry(
         correctedTo,
         created,
         lastReferenced,
+        input.evidence,
       ),
     };
   }
@@ -476,7 +467,7 @@ export function syncMemoryEntry(
 
   db.prepare(`
     UPDATE memories
-    SET category = ?, failure_reason = ?, tool_state = ?, corrected_to = ?, created = ?, last_referenced = ?
+    SET category = ?, failure_reason = ?, tool_state = ?, corrected_to = ?, created = ?, last_referenced = ?, evidence_json = ?
     WHERE id = ?
   `).run(
     updatedCategory,
@@ -485,6 +476,7 @@ export function syncMemoryEntry(
     updatedCorrectedTo,
     updatedCreated,
     updatedLastReferenced,
+    input.evidence ? JSON.stringify(input.evidence) : existing.evidence_json ?? null,
     existing.id,
   );
 
@@ -837,14 +829,15 @@ export function removeExactSyncedMemories(
 export function searchMemories(
   dbManager: DatabaseManager,
   query: string,
-  options: { project?: string; target?: string; category?: MemoryCategory; limit?: number } = {}
+  options: { project?: string | null; target?: string; category?: MemoryCategory; limit?: number } = {}
 ): SqliteMemoryEntry[] {
   if (query.trim().length === 0) {
     return [];
   }
 
   const db = dbManager.getDb();
-  const { project, target, category, limit = 10 } = options;
+  const { project, target, category } = options;
+  const limit = Number.isSafeInteger(options.limit) ? Math.max(1, Math.min(20, options.limit!)) : 10;
 
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -915,7 +908,7 @@ export function searchMemories(
     }
   };
 
-  // FTS5's trigram tokenizer cannot match one- and two-character CJK terms.
+  // FTS5 trigram cannot match short identifiers (K4, F) or one/two-character CJK terms.
   // Use a scoped literal fallback only for those terms so FTS operators and
   // normal tokenized searches retain their existing semantics.
   const runShortCjkFallback = (): SqliteMemoryEntry[] => {
@@ -1076,7 +1069,7 @@ export function searchEigenMemoriesBounded(
   // Only recall snippets, not complete potentially huge memory entries.
   const columns = `m.id, m.project, m.target, m.category,
     substr(m.content, 1, 1600) AS content,
-    NULL AS failure_reason, NULL AS tool_state, NULL AS corrected_to,
+    NULL AS failure_reason, NULL AS tool_state, m.corrected_to, m.evidence_json,
     m.created, m.last_referenced`;
   const found = new Map<number, SqliteMemoryEntry>();
   const addRows = (rows: Array<Parameters<typeof mapRow>[0]>) => {
@@ -1109,6 +1102,15 @@ export function searchEigenMemoriesBounded(
   if (!exactCount) {
     const fallback = buildFallbackFts5Query(query.slice(0, 512));
     if (fallback && fallback !== normalized) tryFts(fallback);
+  }
+  // Trigrams cannot retrieve a two-character domain identifier such as K4.
+  // An explicit short letter+digit identifier gets a project-scoped, capped fallback.
+  const shortIds = [...new Set(query.match(/\b[a-z]\d\b/gi) ?? [])].slice(0, 4);
+  if (shortIds.length) {
+    const matches = shortIds.map(() => "m.content LIKE ? ESCAPE '\\'").join(' OR ');
+    const rows = db.prepare(`SELECT ${columns} FROM memories m WHERE m.project = ? AND (${matches}) ORDER BY m.id DESC LIMIT ?`)
+      .all(project, ...shortIds.map(value => '%' + escapeLikePattern(value) + '%'), maxCandidates) as Array<Parameters<typeof mapRow>[0]>;
+    addRows(rows);
   }
   if (recentProjectCandidates > 0) {
     const recent = db.prepare(`

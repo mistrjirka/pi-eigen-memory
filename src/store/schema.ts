@@ -80,6 +80,7 @@ export const SCHEMA_SQL = `
     failure_reason TEXT,
     tool_state TEXT,
     corrected_to TEXT,
+    evidence_json TEXT,
     created DATE NOT NULL,
     last_referenced DATE NOT NULL,
     hit_count INTEGER NOT NULL DEFAULT 0,

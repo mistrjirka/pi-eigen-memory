@@ -4,6 +4,7 @@
  * See PLAN.md → "Hermes Source File Reference Map" for source lines.
  */
 
+import { observationEvidence, type MemoryEvidence } from "../memory-evidence.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
@@ -277,6 +278,8 @@ type MemoryToolParams = {
   old_text?: string;
   category?: MemoryCategory;
   failure_reason?: string;
+  evidence?: string;
+  branch?: string;
 };
 export function registerMemoryTool(
   pi: ExtensionAPI,
@@ -317,8 +320,10 @@ export function registerMemoryTool(
     action: MemoryAction,
     params: MemoryToolParams,
     signal?: AbortSignal,
+    provenance?: MemoryEvidence,
   ) => {
     const { target: rawTarget, content, old_text, category, failure_reason } = params;
+    const evidence: MemoryEvidence = { ...(provenance ?? observationEvidence()), ...(params.evidence ? { evidence: params.evidence.slice(0, 500) } : {}), ...(params.branch ? { branch: params.branch.slice(0,160), scope: 'branch' as const } : {}) };
     const target = rawTarget === "project" ? "memory" : rawTarget;
     const activeProjectStore = resolveProjectStore(projectStore);
     const activeProjectName = resolveProjectName(projectName);
@@ -356,12 +361,14 @@ export function registerMemoryTool(
           result = await store_.addFailure(content, {
             category: memoryCategory,
             failureReason: failure_reason,
+            evidence,
+            signal,
           });
           if (result.success && !syncHandled) {
             syncWarning = await syncAddToSqlite(rawTarget, content, memoryCategory, failure_reason, dbManager, activeProjectName);
           }
         } else {
-          result = await store_.add(target, content, signal);
+          result = await store_.add(target, content, signal, evidence);
           if (result.success && !syncHandled) {
             await syncEvictionsFromSqlite(rawTarget, result.evicted_entries, dbManager, activeProjectName);
             syncWarning = await syncAddToSqlite(rawTarget, content, undefined, undefined, dbManager, activeProjectName);
@@ -371,7 +378,7 @@ export function registerMemoryTool(
       case "replace":
         if (!old_text) throw new Error("old_text is required for 'replace' action.");
         if (!content) throw new Error("content is required for 'replace' action.");
-        result = await store_.replace(target, old_text, content);
+        result = await store_.replace(target, old_text, content, signal, evidence);
         if (result.success && !syncHandled) {
           syncWarning = await syncReplaceToSqlite(rawTarget, old_text, content, dbManager, activeProjectName);
         }
@@ -420,16 +427,16 @@ This action-specific tool accepts only the parameters listed in its schema.`;
       description,
       promptSnippet: `${label}: persistent memory that survives across sessions`,
       promptGuidelines: [
-        "Use this tool proactively when the user corrects you, shares a preference, or reveals durable environment or project facts.",
+        "Save verified durable observations. State their evidence and applicability. Delegated task instructions, temporary permissions and progress are not durable user preferences.",
         "Do not use memory tools for temporary task state, TODO items, or session progress.",
       ],
       renderResult: createSharedToolResultRenderer(memoryResultView),
       parameters,
-      async execute(_toolCallId, params, signal, _onUpdate, ctx?: { cwd?: string }) {
+      async execute(_toolCallId, params, signal, _onUpdate, ctx?: { cwd?: string; sessionManager?: { getSessionId?(): string; getLeafId?(): string | null } }) {
         if (bindProjectFromCwd && ctx?.cwd) {
           await bindProjectFromCwd(ctx.cwd);
         }
-        return executeAction(action, params as MemoryToolParams, signal);
+        return executeAction(action, params as MemoryToolParams, signal, observationEvidence(ctx));
       },
     });
   };
@@ -453,7 +460,9 @@ This action-specific tool accepts only the parameters listed in its schema.`;
 Add one durable entry. The target and content fields are required.`,
     Type.Object({
       target,
-      content: Type.String({ description: "Entry content to save." }),
+      content: Type.String({ description: "Verified durable observation. Preserve the original scope of decisions and permissions." }),
+      evidence: Type.Optional(Type.String({ maxLength: 500, description: "Source or decisive observation supporting the memory." })),
+      branch: Type.Optional(Type.String({ minLength: 1, maxLength: 160, description: "Only when this fact applies to a specific branch. Omit for shared project knowledge." })),
       category: Type.Optional(category),
       failure_reason: Type.Optional(Type.String({ description: "Why a failure occurred." })),
     }),
@@ -468,7 +477,9 @@ Replace one existing entry. The target, old_text, and content fields are require
     Type.Object({
       target,
       old_text: Type.String({ description: "Substring identifying the entry to replace." }),
-      content: Type.String({ description: "Replacement entry content." }),
+      content: Type.String({ description: "Verified replacement. The superseded entry identity is preserved in provenance." }),
+      evidence: Type.Optional(Type.String({ maxLength: 500, description: "New observation establishing that the prior fact is obsolete." })),
+      branch: Type.Optional(Type.String({ minLength: 1, maxLength: 160, description: "Only when branch-specific." })),
     }),
   );
   registerActionTool(

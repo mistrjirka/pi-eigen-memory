@@ -1,3 +1,5 @@
+> **Eigen fork 0.12:** install this fork with `pi install git:github.com/mistrjirka/pi-eigen-memory`. Git tags and GitHub Releases are the release channel. The package name remains `pi-hermes-memory` for compatibility; this fork does not publish that upstream npm package. See [task-aware recall and migration](docs/eigen-recall-0.12.md).
+
 <div align="center">
 
 ![Pi Hermes Memory](docs/images/pi_memory.png)

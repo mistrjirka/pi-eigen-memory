@@ -14,6 +14,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { decodeMemoryEntry, encodeMemoryEntry, memoryFingerprint, type MemoryEvidence } from "../memory-evidence.js";
 import { scanContent } from "./content-scanner.js";
 import { normalizeMemoryLookupText } from "./memory-lookup.js";
 import {
@@ -144,6 +145,7 @@ export class MemoryStore {
    * chars per entry, letting consolidation declare success while the
    * triggering add still fails.
    */
+  // Optional source provenance is excluded; legacy date/scope overhead remains counted.
   capacityUsage(target: "memory" | "user" | "failure"): number {
     return this.charCount(target);
   }
@@ -151,9 +153,14 @@ export class MemoryStore {
     return this.config.memoryMode !== "policy-only";
   }
 
+  /** Optional provenance must not consume an existing user's note capacity. */
+  private entryChars(entries: readonly string[]): number {
+    return entries.map(entry => entry.replace(/,\s*evidence64=[A-Za-z0-9_-]+(?=\s*-->\s*$)/, '')).join(ENTRY_DELIMITER).length;
+  }
+
   private charCount(target: "memory" | "user" | "failure"): number {
     const entries = this.entriesFor(target);
-    return entries.length ? entries.join(ENTRY_DELIMITER).length : 0;
+    return this.entryChars(entries);
   }
 
   private memoryOverflowStrategy(): MemoryOverflowStrategy {
@@ -211,8 +218,8 @@ export class MemoryStore {
 
   // ─── CRUD ───
 
-  async add(target: "memory" | "user" | "failure", content: string, signal?: AbortSignal): Promise<MemoryResult> {
-    return this.addWithConsolidation(target, content, signal, 1, "Entry added.");
+  async add(target: "memory" | "user" | "failure", content: string, signal?: AbortSignal, evidence?: MemoryEvidence): Promise<MemoryResult> {
+    return this.addWithConsolidation(target, content, signal, 1, "Entry added.", undefined, evidence);
   }
 
   async addFailure(content: string, options: {
@@ -220,12 +227,13 @@ export class MemoryStore {
     failureReason?: string;
     toolState?: string;
     correctedTo?: string;
+    evidence?: MemoryEvidence;
     project?: string;
     signal?: AbortSignal;
   }): Promise<MemoryResult> {
     const failureText = this.buildFailureMemoryText(content, options);
     return this.addWithConsolidation(
-      "failure", failureText, options.signal, 1, "Failure memory saved: " + options.category, options.project,
+      "failure", failureText, options.signal, 1, "Failure memory saved: " + options.category, options.project, options.evidence,
     );
   }
 
@@ -249,6 +257,7 @@ export class MemoryStore {
     addedMessage: string,
     project: string | undefined,
     markMutation: () => void,
+    evidence?: MemoryEvidence,
   ): Promise<MemoryResult> {
     content = content.trim();
     if (!content) return { success: false, error: "Content cannot be empty." };
@@ -273,9 +282,9 @@ export class MemoryStore {
 
     // Encode metadata: both dates = today
     const today = new Date().toISOString().split("T")[0];
-    const encoded = this.encodeEntry(content, today, today, project);
+    const encoded = this.encodeEntry(content, today, today, project, evidence);
 
-    const newTotal = [...entries, encoded].join(ENTRY_DELIMITER).length;
+    const newTotal = this.entryChars([...entries, encoded]);
     if (this.capEnforced && newTotal > limit) {
       this.overflowSince[target] ??= Date.now();
       const strategy = this.memoryOverflowStrategy();
@@ -304,10 +313,11 @@ export class MemoryStore {
     retriesLeft: number,
     addedMessage: string,
     project?: string,
+    evidence?: MemoryEvidence,
   ): Promise<MemoryResult> {
     const result = await this.runTargetMutation(
       target,
-      (markMutation) => this._add(target, content, signal, addedMessage, project, markMutation),
+      (markMutation) => this._add(target, content, signal, addedMessage, project, markMutation, evidence),
       signal,
     );
     if (
@@ -352,7 +362,7 @@ export class MemoryStore {
       return { ...result, error: `${result.error} Auto-consolidation succeeded but reloading memory failed: ${String(err).slice(0, 200)}` };
     }
 
-    const retried = await this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project);
+    const retried = await this.addWithConsolidation(target, content, signal, retriesLeft - 1, addedMessage, project, evidence);
     if (retried.success || !retried.error?.startsWith("Memory at ")) return retried;
     const partialNote = consolidation.partial
       ? ` Consolidation is incomplete: ${consolidation.error ?? "retrigger consolidation to continue"}.`
@@ -367,14 +377,14 @@ export class MemoryStore {
     contentLength: number,
     limit: number,
   ): Promise<MemoryResult> {
-    if (encoded.length > limit) {
+    if (this.entryChars([encoded]) > limit) {
       return this.memoryFullError(target, contentLength);
     }
 
     const remaining = [...entries];
     const evictedEntries: string[] = [];
 
-    while ([...remaining, encoded].join(ENTRY_DELIMITER).length > limit && remaining.length > 0) {
+    while (this.entryChars([...remaining, encoded]) > limit && remaining.length > 0) {
       const evicted = remaining.shift()!;
       evictedEntries.push(this.stripMetadata(evicted));
     }
@@ -472,13 +482,13 @@ export class MemoryStore {
         }
         const replacements = new Map(matches.map((entry) => {
           const decoded = this.decodeEntry(entry);
-          return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined)];
+          return [entry, this.encodeEntry(content, decoded.created, today, decoded.project ?? undefined, decoded.evidence)];
         }));
         plannedEntries = plannedEntries.map((entry) => replacements.get(entry) ?? entry);
       }
 
-      const originalTotal = originalEntries.join(ENTRY_DELIMITER).length;
-      const plannedTotal = plannedEntries.join(ENTRY_DELIMITER).length;
+      const originalTotal = this.entryChars(originalEntries);
+      const plannedTotal = this.entryChars(plannedEntries);
       if (this.capEnforced && plannedTotal > this.charLimit(target)) {
         return {
           success: false,
@@ -499,10 +509,10 @@ export class MemoryStore {
     }, options.signal);
   }
 
-  async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string, signal?: AbortSignal): Promise<MemoryResult> {
+  async replace(target: "memory" | "user" | "failure", oldText: string, newContent: string, signal?: AbortSignal, evidence?: MemoryEvidence): Promise<MemoryResult> {
     return this.runTargetMutation(
       target,
-      (markMutation) => this.replaceUnlocked(target, oldText, newContent, markMutation),
+      (markMutation) => this.replaceUnlocked(target, oldText, newContent, markMutation, evidence),
       signal,
     );
   }
@@ -512,6 +522,7 @@ export class MemoryStore {
     oldText: string,
     newContent: string,
     markMutation: () => void,
+    evidence?: MemoryEvidence,
   ): Promise<MemoryResult> {
     oldText = normalizeMemoryLookupText(oldText);
     newContent = newContent.trim();
@@ -543,11 +554,13 @@ export class MemoryStore {
     const today = new Date().toISOString().split("T")[0];
     const replacements = new Map(matches.map((entry) => {
       const decoded = this.decodeEntry(entry);
-      return [entry, this.encodeEntry(newContent, decoded.created, today, decoded.project ?? undefined)];
+      const source = evidence ?? decoded.evidence;
+      const updated = source ? { ...source, observedAt: new Date().toISOString(), supersedes: [...new Set([...(source.supersedes ?? []), ...(decoded.evidence?.supersedes ?? []), memoryFingerprint(decoded.text)])].slice(-8) } : undefined;
+      return [entry, this.encodeEntry(newContent, decoded.created, today, decoded.project ?? undefined, updated)];
     }));
     const testEntries = entries.map((entry) => replacements.get(entry) ?? entry);
 
-    const newTotal = testEntries.join(ENTRY_DELIMITER).length;
+    const newTotal = this.entryChars(testEntries);
 
     if (this.capEnforced && newTotal > this.charLimit(target)) {
       return {
@@ -661,29 +674,12 @@ export class MemoryStore {
    * Encode metadata (created, lastReferenced) as an HTML comment appended to entry text.
    * The comment is invisible in markdown and transparent to the § delimiter.
    */
-  private encodeEntry(text: string, created: string, lastReferenced: string, project?: string): string {
-    const projectMetadata = project?.trim()
-      ? `, project64=${Buffer.from(project.trim(), "utf-8").toString("base64url")}`
-      : "";
-    return `${text} <!-- created=${created}, last=${lastReferenced}${projectMetadata} -->`;
+  private encodeEntry(text: string, created: string, lastReferenced: string, project?: string, evidence?: MemoryEvidence): string {
+    return encodeMemoryEntry(text, created, lastReferenced, project, evidence);
   }
 
-  /**
-   * Decode entry text, extracting metadata if present.
-   * Falls back to today's date for legacy entries without metadata.
-   */
-  private decodeEntry(raw: string): { text: string; created: string; lastReferenced: string; project: string | null } {
-    const match = raw.match(/^(.*?)\s*<!--\s*created=([^,]+),\s*last=([^,>]+)(?:,\s*project64=([A-Za-z0-9_-]+))?\s*-->\s*$/s);
-    if (match) {
-      let project: string | null = null;
-      if (match[4]) {
-        try { project = Buffer.from(match[4], "base64url").toString("utf-8").trim() || null; } catch {}
-      }
-      return { text: match[1].trim(), created: match[2].trim(), lastReferenced: match[3].trim(), project };
-    }
-    // Legacy entry without metadata — use today as default
-    const today = new Date().toISOString().split("T")[0];
-    return { text: raw.trim(), created: today, lastReferenced: today, project: null };
+  private decodeEntry(raw: string) {
+    return decodeMemoryEntry(raw);
   }
 
   /** Strip metadata comment from entry text for display. */

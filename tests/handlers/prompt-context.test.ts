@@ -241,3 +241,18 @@ describe("memory policy text", () => {
     }
   });
 });
+
+describe("memorySearchEnabled in the memory policy", () => {
+  it("omits unavailable manual read tools while preserving writing and recall independence", () => {
+    for (const memoryPolicyStyle of ["full", "compact"] as const) {
+      const prompt = resolveMemoryPolicyPrompt({ memoryPolicyStyle, memorySearchEnabled: false });
+      assert.doesNotMatch(prompt, /memory_search|memory_read/);
+      assert.match(prompt, /memory_add/);
+      assert.match(prompt, /session_search/);
+    }
+  });
+  it("preserves explicit custom policy text", () => {
+    const memoryPolicyCustomText = "An external memory_search tool is installed.";
+    assert.equal(resolveMemoryPolicyPrompt({ memoryPolicyStyle: "custom", memoryPolicyCustomText, memorySearchEnabled: false }), memoryPolicyCustomText);
+  });
+});

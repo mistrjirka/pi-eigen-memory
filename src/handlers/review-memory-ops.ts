@@ -2,6 +2,7 @@
  * Parse and apply structured memory operations from direct background review.
  */
 
+import { parseMemoryEvidence, type MemoryEvidence } from "../memory-evidence.js";
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
 import { completeSimple, type Message, type SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -16,6 +17,7 @@ export interface ReviewMemoryOperation {
   old_text?: string;
   category?: MemoryCategory;
   failure_reason?: string;
+  supersedes?: string[];
 }
 
 export interface ApplyReviewOperationsResult {
@@ -45,11 +47,13 @@ export interface RunDirectMemoryCompletionOptions {
   requireAtomicShrink?: boolean;
   expectedTarget?: ReviewMemoryOperation["target"];
   /** Optional hard mutation limits for automated learning; other callers retain legacy behavior. */
+  evidence?: MemoryEvidence;
   operationLimits?: {
     maxCount: number;
     maxContentChars: number;
     allowedTargets: ReviewMemoryOperation['target'][];
     allowedActions: ReviewMemoryOperation['action'][];
+    allowedSupersedes?: string[];
   };
 }
 
@@ -524,6 +528,7 @@ function mapOperationsArray(operations: unknown): ReviewMemoryOperation[] | null
     if (typeof op.old_text === "string") operation.old_text = op.old_text;
     if (isMemoryCategory(op.category)) operation.category = op.category;
     if (typeof op.failure_reason === "string") operation.failure_reason = op.failure_reason;
+    if (Array.isArray(op.supersedes)) operation.supersedes = op.supersedes.filter((x): x is string => typeof x === 'string' && /^[a-f0-9]{24}$/.test(x)).slice(0,8);
     parsed.push(operation);
   }
 
@@ -539,6 +544,7 @@ export async function applyReviewOperations(
   options: {
     requireAtomicShrink?: boolean;
     expectedTarget?: ReviewMemoryOperation["target"];
+    evidence?: MemoryEvidence;
     signal?: AbortSignal;
   } = {},
 ): Promise<ApplyReviewOperationsResult> {
@@ -634,6 +640,7 @@ export async function applyReviewOperations(
             category,
             failureReason: op.failure_reason,
             project: projectName ?? undefined,
+            evidence: options.evidence ? { ...options.evidence, ...(op.supersedes?.length ? { supersedes: op.supersedes } : {}) } : undefined,
             signal: options.signal,
           });
           if (result.success) {
@@ -642,7 +649,7 @@ export async function applyReviewOperations(
             skippedCount++;
           }
         } else {
-          result = await activeStore.add(memoryTarget, op.content, options.signal);
+          result = await activeStore.add(memoryTarget, op.content, options.signal, options.evidence ? { ...options.evidence, ...(op.supersedes?.length ? { supersedes: op.supersedes } : {}) } : undefined);
           if (result.success) {
             appliedCount++;
           } else {
@@ -656,7 +663,7 @@ export async function applyReviewOperations(
           skippedCount++;
           continue;
         }
-        result = await activeStore.replace(memoryTarget, op.old_text, op.content, options.signal);
+        result = await activeStore.replace(memoryTarget, op.old_text, op.content, options.signal, options.evidence);
         if (result.success) {
           appliedCount++;
         } else {
@@ -968,6 +975,7 @@ export async function runDirectMemoryCompletion(
           && limits.allowedActions.includes(op.action)
           && (!op.content || op.content.length <= limits.maxContentChars)
           && (!op.old_text || op.old_text.length <= limits.maxContentChars)
+          && (!op.supersedes?.length || op.supersedes.every(key => limits.allowedSupersedes?.includes(key)))
         );
       }
       const operationDiagnostics = options.operationLimits
@@ -997,6 +1005,7 @@ export async function runDirectMemoryCompletion(
         {
           requireAtomicShrink: options.requireAtomicShrink,
           expectedTarget: options.expectedTarget,
+          evidence: parseMemoryEvidence(options.evidence),
           signal: options.signal,
         },
       );

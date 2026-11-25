@@ -46,7 +46,7 @@ async function emit(event: string, data: any = {}) {
 }
 
 async function search(query = "durable") {
-  return tools.memory_search.execute("search", { query }, undefined, undefined, ctx);
+  return tools.memory_search.execute("search", { query, scope: "all" }, undefined, undefined, ctx);
 }
 
 async function writeSession() {

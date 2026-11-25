@@ -43,6 +43,7 @@ concurrency:
 
 jobs:
   prepare:
+    if: github.repository == 'chandra447/pi-hermes-memory'
     name: Bump, tag and publish
     runs-on: ubuntu-latest
     timeout-minutes: 15

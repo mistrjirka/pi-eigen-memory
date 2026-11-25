@@ -31,8 +31,10 @@ describe('Eigen just-in-time recall',()=>{
       assert.doesNotMatch(before?.message?.content??'',/Slopyard/);
       const tool={toolName:'bash',isError:true,content:[{type:'text',text:'Dataverse metadata returned 403, code 0x80040220'}]};
       const recalled=await h['tool_result'][0](tool,ctx);
-      assert.ok(recalled?.content?.length > tool.content.length);
-      assert.match(recalled.content.at(-1).text,/Do not retry denied metadata/);
+      assert.equal(recalled, undefined, 'the prompt already supplied this note');
+      await h['session_compact'][0]();
+      const afterCompaction=await h['tool_result'][0]({...tool,content:[{type:'text',text:'Dataverse EntityDefinitions metadata returned 403 after compact'}]},ctx);
+      assert.match(afterCompaction.content.at(-1).text,/Do not retry denied metadata/);
       const duplicate=await h['tool_result'][0](tool,ctx);
       assert.equal(duplicate,undefined);
       const neutral=await h['tool_result'][0]({toolName:'bash',isError:false,content:[{type:'text',text:'normal successful HTTP 200'}]},ctx);
@@ -98,20 +100,24 @@ describe('Eigen just-in-time recall',()=>{
     const db=new DatabaseManager(tmp);
     const h:Record<string,Function[]>={};
     const ctx={cwd:join(tmp,'SBHG-Buddy')} as any;
+    let lookups=0;
     try{
       addMemory(db,'Dataverse EntityDefinitions metadata HTTP 403 0x80040220 missing prvReadEntity, incident records still return 200','memory','SBHG-Buddy');
       setupEigenRecall({on:(k:string,fn:Function)=>{(h[k]??=[]).push(fn);return ()=>{};}} as any,
-        db,{eigenRecallEnabled:true,eigenRecallWarnMs:0} as any,()=> 'SBHG-Buddy',{ensureMemoryReady:async()=>{}});
+        db,{eigenRecallEnabled:true,eigenRecallWarnMs:0} as any,()=> 'SBHG-Buddy',{ensureMemoryReady:async()=>{lookups++;}});
       const before={messageType:'user',prompt:'Investigate Dataverse EntityDefinitions metadata 403'};
       await h['before_agent_start'][0](before,ctx);
       const error=(id:number)=>({toolName:'bash',isError:true,content:[{type:'text',text:`Dataverse EntityDefinitions metadata returned HTTP 403 0x80040220 error-${id}`}]});
       for(let i=0;i<3;i++){
         const result=await h['tool_result'][0](error(i),ctx);
-        assert.ok(result?.content?.length>1,`expected hint for error ${i}`);
+        assert.equal(result,undefined,'already supplied note is not repeated');
       }
+      assert.equal(lookups,4);
       assert.equal(await h['tool_result'][0](error(3),ctx),undefined);
+      assert.equal(lookups,4);
       await h['before_agent_start'][0](before,ctx);
-      assert.ok((await h['tool_result'][0](error(3),ctx))?.content?.length>1);
+      await h['tool_result'][0](error(3),ctx);
+      assert.equal(lookups,6);
     }finally{db.close();rmSync(tmp,{recursive:true,force:true});}
   });
   it('ignores generic no-context prompts',()=>{

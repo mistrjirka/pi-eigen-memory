@@ -28,7 +28,7 @@ describe('registerMemorySearchTool', () => {
     let captured: any;
     const mockPi = {
       registerTool: (def: any) => {
-        captured = def;
+        if (def.name === 'memory_search') captured = def;
       },
     } as any;
 
@@ -52,9 +52,9 @@ describe('registerMemorySearchTool', () => {
     addMemory(dbManager, 'project failure deployment lesson', 'failure', 'project-a');
 
     let captured: any;
-    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+    registerMemorySearchTool({ registerTool: (def: any) => { if (def.name === 'memory_search') captured = def; } } as any, dbManager);
 
-    const result = await captured.execute('tc-1', { query: 'deployment' });
+    const result = await captured.execute('tc-1', { query: 'deployment', scope: 'all' });
     const text = result.content[0].text;
 
     assert.match(text, /scope=global \[target=memory\] global deployment convention/);
@@ -73,11 +73,11 @@ describe('registerMemorySearchTool', () => {
     addMemory(dbManager, 'project failure deployment lesson', 'failure', 'project-a');
 
     let captured: any;
-    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+    registerMemorySearchTool({ registerTool: (def: any) => { if (def.name === 'memory_search') captured = def; } } as any, dbManager);
 
     assert.ok(captured.parameters.properties.target.enum.includes('project'));
 
-    const result = await captured.execute('tc-1', { query: 'deployment', target: 'project' });
+    const result = await captured.execute('tc-1', { query: 'deployment', target: 'project', scope: 'all' });
     const text = result.content[0].text;
 
     assert.strictEqual(result.details.success, true);
@@ -93,9 +93,9 @@ describe('registerMemorySearchTool', () => {
     addMemory(dbManager, 'literal project entry', 'memory', 'foo] bar');
 
     let captured: any;
-    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+    registerMemorySearchTool({ registerTool: (def: any) => { if (def.name === 'memory_search') captured = def; } } as any, dbManager);
 
-    const result = await captured.execute('tc-1', { query: 'literal' });
+    const result = await captured.execute('tc-1', { query: 'literal', project: 'foo] bar' });
     const firstResultLine = result.content[0].text.split('\n').find((line: string) => line.startsWith('🧠'))!;
 
     assert.match(firstResultLine, /scope=project:foo%5D%20bar \[target=project\]/);
@@ -110,7 +110,7 @@ describe('registerMemorySearchTool', () => {
     addMemory(dbManager, 'recallable tide note', 'memory');
 
     let captured: any;
-    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+    registerMemorySearchTool({ registerTool: (def: any) => { if (def.name === 'memory_search') captured = def; } } as any, dbManager);
 
     await captured.execute('tc-1', { query: 'recallable' });
     await captured.execute('tc-2', { query: 'volcano' });
@@ -127,7 +127,7 @@ describe('registerMemorySearchTool', () => {
     addMemory(dbManager, 'unmatched entry', 'memory');
 
     let captured: any;
-    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, dbManager);
+    registerMemorySearchTool({ registerTool: (def: any) => { if (def.name === 'memory_search') captured = def; } } as any, dbManager);
 
     const result = await captured.execute('tc-1', { query: 'zzz-no-match-q' });
     assert.strictEqual(result.details.count, 0);
@@ -142,7 +142,7 @@ describe('registerMemorySearchTool', () => {
 
     let captured: any;
     registerMemorySearchTool(
-      { registerTool: (def: any) => { captured = def; } } as any,
+      { registerTool: (def: any) => { if (def.name === 'memory_search') captured = def; } } as any,
       dbManager,
       { usageTrackingEnabled: false },
     );
@@ -168,7 +168,7 @@ describe('registerMemorySearchTool', () => {
     };
 
     let captured: any;
-    registerMemorySearchTool({ registerTool: (def: any) => { captured = def; } } as any, flaky);
+    registerMemorySearchTool({ registerTool: (def: any) => { if (def.name === 'memory_search') captured = def; } } as any, flaky);
 
     // getDb calls: getMemoryStats(1) + searchMemories(1) + recordSearchHits(1, throws).
     const result = await captured.execute('tc-1', { query: 'resilient' });
@@ -179,5 +179,36 @@ describe('registerMemorySearchTool', () => {
     assert.strictEqual(getMemoryUsageSignals(dbManager, { target: 'memory', project: null }).size, 0);
 
     dbManager.close();
+  });
+});
+
+describe('bounded explicit memory access',()=>{
+  function tools(db:DatabaseManager,projectName:string|null='project-a') { const registered:Record<string,any>={};registerMemorySearchTool({registerTool:(d:any)=>{registered[d.name]=d;}} as any,db,{projectName});return registered; }
+  it('defaults to the exact current project and accepts explicit global/null or all scopes',async()=>{
+    const db=makeDbManager();try{
+      addMemory(db,'K4 schedule global');addMemory(db,'K4 schedule local','memory','project-a');addMemory(db,'K4 schedule other','memory','project-b');
+      const t=tools(db);
+      assert.equal((await t.memory_search.execute('x',{query:'K4 schedule'})).details.count,1);
+      const global=await t.memory_search.execute('x',{query:'K4 schedule',project:null});assert.match(global.content[0].text,/global/);assert.equal(global.details.count,1);
+      assert.equal((await t.memory_search.execute('x',{query:'K4 schedule',scope:'all'})).details.count,3);
+      assert.ok(t.memory_search.parameters.properties.project.anyOf.some((x:any)=>x.type==='null'));
+    }finally{db.close();}
+  });
+  it('rejects negative/fractional/unbounded limits and clamps direct-store callers',async()=>{
+    const db=makeDbManager();try{addMemory(db,'K4 schedule','memory','project-a');const t=tools(db);
+      for(const limit of [-1,0,0.5,21,Infinity])assert.equal((await t.memory_search.execute('x',{query:'K4',limit})).isError,true);
+    }finally{db.close();}
+  });
+  it('keeps search output bounded and reads the complete entry through exact pages',async()=>{
+    const db=makeDbManager();try{
+      const content='K4 schedule '+ 'verified fact '.repeat(2000);const entry=addMemory(db,content,'memory','project-a');const t=tools(db);
+      const search=await t.memory_search.execute('x',{query:'K4',max_chars:500,snippet_chars:200});assert.ok(search.content[0].text.length<=500);assert.match(search.content[0].text,/memory_read/);
+      let offset=0,reconstructed='';for(let count=0;count<200;count++){
+        const page=await t.memory_read.execute('x',{id:entry.id,offset,max_chars:1000});assert.ok(page.content[0].text.length<=1000);
+        const body=page.content[0].text.split('\n').slice(2).join('\n').replace(/\n\[next_offset=\d+\]$/,'');reconstructed+=body;
+        if(page.details.next_offset===null)break;assert.ok(page.details.next_offset>offset);offset=page.details.next_offset;
+      }
+      assert.equal(reconstructed,content);
+    }finally{db.close();}
   });
 });

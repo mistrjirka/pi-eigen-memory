@@ -157,6 +157,10 @@ export function loadConfig(configPath = DEFAULT_CONFIG_PATH): MemoryConfig {
       if (typeof parsed.reviewEnabled === "boolean") config.reviewEnabled = parsed.reviewEnabled;
       if (typeof parsed.eigenLearningEnabled === "boolean") config.eigenLearningEnabled = parsed.eigenLearningEnabled;
       if (typeof parsed.eigenRecallEnabled === "boolean") config.eigenRecallEnabled = parsed.eigenRecallEnabled;
+      for (const key of ['eigenRecallMainEnabled', 'eigenRecallChildEnabled', 'eigenLearningMainEnabled', 'eigenLearningChildEnabled', 'memorySearchEnabled'] as const) {
+        if (typeof parsed[key] === 'boolean') config[key] = parsed[key];
+      }
+      if (isNonNegativeNumber(parsed.eigenRecallBudgetChars)) config.eigenRecallBudgetChars = Math.min(12000, Math.floor(parsed.eigenRecallBudgetChars));
       if (isNonNegativeNumber(parsed.eigenRecallWarnMs)) config.eigenRecallWarnMs = parsed.eigenRecallWarnMs;
       if (isNonNegativeNumber(parsed.eigenLearningMaxChars)) config.eigenLearningMaxChars = Math.max(1500, Math.min(12000, parsed.eigenLearningMaxChars));
       if (isNonNegativeNumber(parsed.eigenLearningCooldownMs)) config.eigenLearningCooldownMs = Math.min(3600000, parsed.eigenLearningCooldownMs);

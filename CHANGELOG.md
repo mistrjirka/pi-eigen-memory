@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-25
+
+### Fixed
+- Automatic recall now extracts bounded terms across the whole task, preserves short identifiers and numeric errors, and ignores launch boilerplate and directory prefixes. Low-confidence matches are omitted.
+- Manual search accepts the documented `project: null`, validates integer limits, defaults to the current project, and bounds both snippets and complete output. Explicit `scope: "all"` searches other scopes.
+- Recalled notes already present in current context are suppressed, including tool-result notes. Compaction permits recall again when the note was dropped.
+
+### Added
+- `memory_read` provides exact, paginated full-entry access from search IDs.
+- Optional provenance, observation dates, branch/task applicability and explicit supersession persist through Markdown and SQLite. Existing records remain readable without invented source claims. Model writes are observations or delegated observations, never automatically classified as direct human instructions.
+- Independent main/child automatic recall and learning controls, a manual-search control, and a combined per-request recall character budget.
+- `/memory-recall on`, `off`, and `diagnose <task>` for session controls and deterministic selection diagnostics.
+- Offline regressions cover the actual recall hook, task/noise rejection, errors, scope, compaction, supersession, migration and bounded tool access.
+- Fork releases use Git tags and GitHub Releases. Upstream npm release workflows are guarded against execution in the Eigen fork.
+
+### Migration
+- No existing settings or memories are rewritten on upgrade. New optional metadata is written with future additions/replacements. See [the 0.12 migration notes](docs/eigen-recall-0.12.md).
+
 ## [0.11.0] - 2026-11-11
 
 ### Added

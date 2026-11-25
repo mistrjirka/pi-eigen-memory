@@ -83,12 +83,27 @@ describe('Eigen event-driven learner',()=>{
       const call=signals[0] as {userPrompt:string;systemPrompt:string;config:MemoryConfig;operationLimits:{allowedTargets:string[];maxCount:number}};
       assert.ok(call.userPrompt.length<=7000);
       assert.match(call.userPrompt,/0x80040220/);
-      assert.match(call.systemPrompt,/403/i);
-      assert.match(call.systemPrompt,/metadata/i);
+      assert.match(call.systemPrompt,/permissions scoped/i);
+      assert.match(call.systemPrompt,/Temporary task constraints/i);
       assert.deepEqual(call.operationLimits.allowedTargets,['project','failure']);
-      assert.equal(call.operationLimits.maxCount,2);
+      assert.equal(call.operationLimits.maxCount,1);
       assert.equal(call.config.llmModelOverride,'opencode-go/muse-spark-1.3-contributor');
       assert.equal((savedReports[0] as {applied:number}).applied,1);
     }finally{db.close();rmSync(tmp,{recursive:true,force:true});}
+  });
+});
+
+describe('learning origin controls',()=>{
+  it('does not reinterpret delegated task constraints as human preferences',async()=>{
+    const tmp=mkdtempSync(join(tmpdir(),'eigen-delegated-'));const db=new DatabaseManager(tmp);const h:Record<string,Function[]>={};let calls=0;
+    try{
+      setupEigenLearning({on:(k:string,f:Function)=>{(h[k]??=[]).push(f);}} as any,{} as any,{} as any,config,db,'project-a',{env:{PI_SUBAGENT_AGENT_ID:'worker'},runReview:async()=>{calls++;return {ok:true,appliedCount:0};}});
+      h.message_end[0]({message:{role:'user',content:'From now on never run native builds for this task.'}});
+      h.agent_end[0]({},{});assert.equal(calls,0);
+    }finally{db.close();rmSync(tmp,{recursive:true,force:true});}
+  });
+  it('can disable learning for one role without changing recall or manual tools',()=>{
+    const tmp=mkdtempSync(join(tmpdir(),'eigen-disabled-'));const db=new DatabaseManager(tmp);let registered=0;
+    try{setupEigenLearning({on:()=>{registered++;}} as any,{} as any,{} as any,{...config,eigenLearningChildEnabled:false},db,'project-a',{env:{PI_SUBAGENT_AGENT_ID:'worker'}});assert.equal(registered,0);}finally{db.close();rmSync(tmp,{recursive:true,force:true});}
   });
 });

@@ -46,6 +46,15 @@ export interface MemoryConfig {
   eigenLearningCooldownMs?: number;
   /** Append relevant prior failure context to failed tool results. */
   eigenRecallEnabled?: boolean;
+  /** Independent automatic recall controls. Unset preserves the enabled feature on both roles. */
+  eigenRecallMainEnabled?: boolean;
+  eigenRecallChildEnabled?: boolean;
+  /** Combined prompt and tool-result recall budget per user request. Default 2400 characters. */
+  eigenRecallBudgetChars?: number;
+  eigenLearningMainEnabled?: boolean;
+  eigenLearningChildEnabled?: boolean;
+  /** Manual memory_search/memory_read remain independent of automatic recall. Default true. */
+  memorySearchEnabled?: boolean;
   /** Warn when a relevant recall takes this long, including lazy initialization. 0 disables. Default 150ms. */
   eigenRecallWarnMs?: number;
   /** How background review invokes the LLM. Default: direct */

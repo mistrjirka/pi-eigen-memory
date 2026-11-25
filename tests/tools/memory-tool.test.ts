@@ -726,7 +726,8 @@ describe("registerMemoryTool", () => {
     registerMemoryTool(mockPi, mockStore, null);
     await capturedResult.execute("tc-1", { action: "replace", target: "memory", content: "new", old_text: "old" }, undefined as any, undefined as any, undefined as any);
 
-    assert.deepStrictEqual(replaceArgs, ["memory", "old", "new"], "should pass target, old_text, content to store.replace");
+    assert.deepStrictEqual(replaceArgs.slice(0, 3), ["memory", "old", "new"], "should pass target, old_text, content to store.replace");
+    assert.equal(replaceArgs[4].origin, "observation");
   });
 
   it("binds project identity from execute ctx.cwd instead of a factory snapshot", async () => {

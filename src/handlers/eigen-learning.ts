@@ -1,6 +1,8 @@
 /** Bounded, event-driven learning. This path never sends a full session or memory store. */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { isDelegatedAgent, isMemoryMaintenance, memoryFingerprint, observationEvidence } from '../memory-evidence.js';
+import { eigenQueryTerms } from '../recall-query.js';
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
 import type { DatabaseManager } from '../store/db.js';
 import type { MemoryStore } from '../store/memory-store.js';
@@ -98,8 +100,8 @@ export function buildEigenLearningPrompt(
   return result.slice(0, budget);
 }
 
-export const EIGEN_LEARNING_SYSTEM_PROMPT = `Extract only one durable, verified lesson from this event. Do not save secrets, guesses or temporary progress. Distinguish metadata HTTP 403 from ordinary record access.
-Return JSON exactly as {"operations":[{"action":"add","target":"project","content":"verified lesson"}]} or {"operations":[]}. The target must be the literal "project", never a project name. Limit content to 500 characters.`;
+export const EIGEN_LEARNING_SYSTEM_PROMPT = `Extract only one durable, verified lesson from this event. Do not save secrets, guesses or temporary progress. Keep permissions scoped to the observed operation. Temporary task constraints, delegated instructions and progress are not durable preferences. Preserve applicable prior decisions and permissions within their original scope; do not broaden them.
+Return JSON exactly as {"operations":[{"action":"add","target":"project","content":"verified lesson"}]} or {"operations":[]}. The target must be the literal "project", never a project name. Limit content to 500 characters. If newer decisive evidence supersedes a listed candidate, add its exact key in an optional supersedes array. Do not infer supersession from recency alone.`;
 
 export interface EigenLearningOptions {
   ensureMemoryReady?: EnsureMemoryReady;
@@ -107,6 +109,7 @@ export interface EigenLearningOptions {
   writeReport?: (report: EigenLearningReport) => void | Promise<void>;
   clock?: () => number;
   onSettled?: () => void;
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Wire once, with the Pi extension instance. No periodic scans, no full-memory LLM payload. */
@@ -119,7 +122,9 @@ export function setupEigenLearning(
   projectName: ProjectNameRef,
   options: EigenLearningOptions = {},
 ): void {
-  if (!config.reviewEnabled || !config.eigenLearningEnabled) return;
+  const env = options.env ?? process.env;
+  const child = isDelegatedAgent(env);
+  if (!config.reviewEnabled || !config.eigenLearningEnabled || isMemoryMaintenance(env) || (child ? config.eigenLearningChildEnabled === false : config.eigenLearningMainEnabled === false)) return;
   const runReview = options.runReview ?? runDirectMemoryCompletion;
   const now = options.clock ?? Date.now;
   const cooldownMs = config.eigenLearningCooldownMs ?? DEFAULT_COOLDOWN_MS;
@@ -130,7 +135,7 @@ export function setupEigenLearning(
   const abort = new AbortController();
 
   pi.on('message_end', (event) => {
-    if (closed || event.message.role !== 'user') return;
+    if (closed || child || event.message.role !== 'user') return;
     const text = getMessageText(event.message, 1000);
     const signal = text && eigenSignalForUser(text, config);
     if (signal && signals.length < MAX_SIGNAL_COUNT) signals.push(signal);
@@ -164,8 +169,9 @@ export function setupEigenLearning(
         const project = resolveProjectStore(projectStore);
         if (!project || !name) return;
         const excerpt = batch.find(s=>s.kind==='error')?.detail ?? batch[0]!.detail;
-        const tokens = excerpt.match(/[a-zA-Z][\w-]{3,}|0x[0-9a-f]{6,}/g)?.slice(0, 12) ?? [];
+        const tokens = eigenQueryTerms(excerpt).slice(0,12);
         let candidates: string[] = [];
+        let allowedSupersedes: string[] = [];
         try {
           const query = tokens.slice(0, 6).join(' ');
           if (query) candidates = searchEigenMemoriesBounded(dbManager, query, {
@@ -175,7 +181,7 @@ export function setupEigenLearning(
             const lowercase = entry.content.toLowerCase();
             const queryTokens = query.toLowerCase().split(/\s+/).filter(token => token.length >= 4);
             return queryTokens.filter(token => lowercase.includes(token)).length >= 2;
-          }).slice(0, 3).map(entry => entry.content);
+          }).slice(0, 3).map(entry => { const key = memoryFingerprint(entry.content); allowedSupersedes.push(key); return '[key=' + key + '] ' + entry.content; });
         } catch { /* retrieval is optional */ }
         memoryCandidates = candidates.length;
         const entries = ctx.sessionManager.getBranch();
@@ -185,9 +191,11 @@ export function setupEigenLearning(
           userPrompt,
           systemPrompt: EIGEN_LEARNING_SYSTEM_PROMPT,
           config,
+          evidence: { ...observationEvidence(ctx, env), evidence: batch[0]?.detail.slice(0,500) },
           timeoutMs: 60000,
           operationLimits: {
-            maxCount: 2, maxContentChars: 500,
+            maxCount: 1, maxContentChars: 500,
+            allowedSupersedes,
             allowedTargets: ['project', 'failure'],
             allowedActions: ['add'],
           },
