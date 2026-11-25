@@ -38,18 +38,23 @@ export interface EigenRecallOptions {
 export interface RecallDiagnostic { status?:'no-project'|'no-terms'|'budget'|'no-match'|'selected'|'lookup-failed'; terms:string[]; scope:string|null; role:'main'|'child'; selected:Array<{id?:number;version:string;score:number;matched:string[]}>; excluded:Array<{id?:number;reason:string}>; chars:number; remainingChars:number; }
 function branchText(ctx:ExtensionContext):string | undefined {
   try {
-    const entries=ctx.sessionManager.getBranch() as unknown as Array<Record<string,unknown>>;
+    const entries=ctx.sessionManager.getBranch();
     let from=0; let summary='';
-    for(let i=entries.length-1;i>=0;i--)if(entries[i].type==='compaction') {
-      const entry=entries[i]; summary=typeof entry.summary==='string'?entry.summary:'';
+    for(let i=entries.length-1;i>=0;i--) {
+      const entry=entries[i];
+      if(entry.type!=='compaction')continue;
+      summary=entry.summary;
       const kept=entries.findIndex(e=>e.id===entry.firstKeptEntryId);
       from=kept>=0?kept:i+1; break;
     }
     const texts:string[]=[summary.slice(0,64000),...(summary.match(/\[memory:[a-f0-9]{24}\]/g)??[])];
     let remaining=Math.max(0,64000-summary.length);
     for(let i=entries.length-1;i>=from;i--) {
-      const entry=entries[i]; const message=entry.message as Record<string,unknown>|undefined;
-      const content=entry.type==='custom_message'?entry.content:message?.content;
+      const entry=entries[i];
+      const message=entry.type==='message'?entry.message:undefined;
+      const content=entry.type==='custom_message' ? entry.content
+        : message && (message.role==='user'||message.role==='assistant'||message.role==='toolResult'||message.role==='custom')
+          ? message.content : undefined;
       const remember=(text:string)=>{
         // Keep identity markers from all roles without copying full tool outputs.
         if(text.includes('[memory:'))for(const marker of text.match(/\[memory:[a-f0-9]{24}\]/g)??[])texts.push(marker);
